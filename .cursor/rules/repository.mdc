@@ -1,0 +1,14 @@
+# Repository First
+
+Never assume how the repository works.
+
+Before implementing a feature or fixing a bug:
+
+1. Inspect the relevant directory structure.
+2. Find the existing implementation closest to the requested change.
+3. Trace the relevant call flow.
+4. Inspect related types, interfaces, DTOs, schemas, and configuration.
+5. Check existing tests.
+6. Only then decide where and how to implement the change.
+
+Do not introduce a new pattern when an established project pattern already exists.

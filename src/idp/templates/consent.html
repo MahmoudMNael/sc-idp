@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Authorize{% endblock %}
+{% block body %}
+<h1>Authorize {{ client_name }}</h1>
+<p>This application wants to know who you are ({{ scopes }}).</p>
+<form method="post" action="/consent">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <input type="hidden" name="next" value="{{ next }}">
+  <button type="submit" name="decision" value="allow">Allow</button>
+  <button type="submit" name="decision" value="deny" class="secondary">Deny</button>
+</form>
+{% endblock %}
