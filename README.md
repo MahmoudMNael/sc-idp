@@ -4,6 +4,7 @@ Central OpenID Connect provider: **who the user is**. Products decide **what the
 
 - Implementation spec: [plan.md](plan.md)
 - Product teams: [docs/integrating-a-product.md](docs/integrating-a-product.md)
+- How the IdP is built (every subsystem, theory + this repo): [docs/idp-reference.md](docs/idp-reference.md)
 - [Architecture](docs/architecture.md) · [Security](docs/security.md) · [Operations](docs/operations.md)
 
 ## Install
