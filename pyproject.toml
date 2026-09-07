@@ -23,6 +23,7 @@ dependencies = [
     "itsdangerous==2.2.0",
     "httpx==0.28.1",
     "Authlib==1.8.0",
+    "asyncpg[binary]"
 ]
 
 [tool.setuptools.packages.find]

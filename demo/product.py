@@ -148,6 +148,7 @@ def create_product_app() -> FastAPI:
         async with httpx.AsyncClient() as http:
             meta = (await http.get(f"{cfg['idp']}/.well-known/openid-configuration")).json()
         nonce = secrets.token_urlsafe(16)
+        code_verifier = secrets.token_urlsafe(64)
         client = AsyncOAuth2Client(
             cfg["client_id"],
             cfg["client_secret"],
@@ -155,13 +156,15 @@ def create_product_app() -> FastAPI:
             redirect_uri=f"{cfg['url']}/callback",
             code_challenge_method="S256",
         )
-        url, state = client.create_authorization_url(meta["authorization_endpoint"], nonce=nonce)
+        url, state = client.create_authorization_url(
+            meta["authorization_endpoint"], nonce=nonce, code_verifier=code_verifier
+        )
         response = RedirectResponse(url, status_code=302)
         response.set_cookie(
             "oidc_flow",
             _sign_flow(
                 cfg["secret_key"],
-                {"state": state, "nonce": nonce, "verifier": client.code_verifier, "authz": meta["authorization_endpoint"], "token": meta["token_endpoint"], "jwks": meta["jwks_uri"]},
+                {"state": state, "nonce": nonce, "verifier": code_verifier, "authz": meta["authorization_endpoint"], "token": meta["token_endpoint"], "jwks": meta["jwks_uri"]},
             ),
             httponly=True,
             max_age=600,
