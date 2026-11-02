@@ -3,13 +3,23 @@ import secrets
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from idp.audit import audit
 from idp.crypto import hash_token
 from idp.deps import db_dep, s_dep
 from idp.keys import rotate_keys
-from idp.models import OAuthClient
+from idp.models import IdpRole, OAuthClient, User
+from idp.roles import (
+    assign_role_to_user,
+    ensure_role_exists,
+    get_email_preassigned_roles,
+    get_user_roles,
+    preassign_role_to_email,
+    remove_preassigned_role_from_email,
+    remove_role_from_user,
+)
 from idp.settings import Settings
 
 router = APIRouter(prefix="/admin")
@@ -71,3 +81,116 @@ async def rotate(
     kid = await rotate_keys(session, settings)
     await audit(session, "admin_rotate_keys", detail={"kid": kid})
     return {"kid": kid, "status": "active"}
+
+
+class RoleIn(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    description: str | None = None
+
+
+class RoleAssignIn(BaseModel):
+    email: str = Field(min_length=3)
+    role: str = Field(min_length=1, max_length=64)
+
+
+@router.post("/roles")
+async def create_role(
+    body: RoleIn,
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+    authorization: str | None = Header(default=None),
+):
+    _admin(settings, authorization)
+    role_name = body.name.strip().lower()
+    if await session.get(IdpRole, role_name):
+        raise HTTPException(409, "role already exists")
+    role = IdpRole(name=role_name, description=body.description)
+    session.add(role)
+    await session.flush()
+    await audit(session, "admin_create_role", detail={"role": role_name})
+    return {"name": role.name, "description": role.description}
+
+
+@router.get("/roles")
+async def list_roles(
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+    authorization: str | None = Header(default=None),
+):
+    _admin(settings, authorization)
+    rows = (await session.execute(select(IdpRole).order_by(IdpRole.name))).scalars().all()
+    return [{"name": r.name, "description": r.description} for r in rows]
+
+
+@router.post("/roles/assign")
+async def assign_role(
+    body: RoleAssignIn,
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+    authorization: str | None = Header(default=None),
+):
+    _admin(settings, authorization)
+    email_n = body.email.strip().lower()
+    role_name = body.role.strip().lower()
+    await ensure_role_exists(session, role_name)
+    await preassign_role_to_email(session, email_n, role_name)
+
+    user = (await session.execute(select(User).where(User.email == email_n))).scalar_one_or_none()
+    user_assigned = False
+    if user:
+        user_assigned = await assign_role_to_user(session, user.id, role_name)
+
+    await audit(session, "admin_assign_role", detail={"email": email_n, "role": role_name})
+    return {
+        "email": email_n,
+        "role": role_name,
+        "preassigned": True,
+        "assigned_to_active_user": user_assigned or (user is not None),
+    }
+
+
+@router.post("/roles/unassign")
+async def unassign_role(
+    body: RoleAssignIn,
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+    authorization: str | None = Header(default=None),
+):
+    _admin(settings, authorization)
+    email_n = body.email.strip().lower()
+    role_name = body.role.strip().lower()
+    removed_pre = await remove_preassigned_role_from_email(session, email_n, role_name)
+
+    user = (await session.execute(select(User).where(User.email == email_n))).scalar_one_or_none()
+    removed_user = False
+    if user:
+        removed_user = await remove_role_from_user(session, user.id, role_name)
+
+    await audit(session, "admin_unassign_role", detail={"email": email_n, "role": role_name})
+    return {
+        "email": email_n,
+        "role": role_name,
+        "removed_preassignment": removed_pre,
+        "removed_user_role": removed_user,
+    }
+
+
+@router.get("/roles/assignments")
+async def get_assignments(
+    email: str,
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+    authorization: str | None = Header(default=None),
+):
+    _admin(settings, authorization)
+    email_n = email.strip().lower()
+    preassigned = await get_email_preassigned_roles(session, email_n)
+    user = (await session.execute(select(User).where(User.email == email_n))).scalar_one_or_none()
+    user_roles = await get_user_roles(session, user.id) if user else []
+    return {
+        "email": email_n,
+        "user_id": str(user.id) if user else None,
+        "user_roles": user_roles,
+        "preassigned_roles": preassigned,
+    }
+

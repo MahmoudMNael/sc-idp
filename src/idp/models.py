@@ -157,3 +157,28 @@ class MfaRecoveryCode(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class IdpRole(Base):
+    __tablename__ = "idp_roles"
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class UserIdpRole(Base):
+    __tablename__ = "user_idp_roles"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    role_name: Mapped[str] = mapped_column(ForeignKey("idp_roles.name", ondelete="CASCADE"), primary_key=True)
+    assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EmailIdpRolePreassignment(Base):
+    __tablename__ = "email_idp_role_preassignments"
+
+    email: Mapped[str] = mapped_column(String(320), primary_key=True)
+    role_name: Mapped[str] = mapped_column(ForeignKey("idp_roles.name", ondelete="CASCADE"), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+

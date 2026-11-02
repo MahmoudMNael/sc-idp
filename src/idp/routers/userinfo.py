@@ -33,8 +33,12 @@ async def userinfo(
     if user is None or not user.is_active:
         return token_error("invalid_token", status=401)
     body = {"sub": str(user.id)}
-    scopes = (claims.get("scope") or "").split()
-    if "email" in scopes:
+    scopes_set = set((claims.get("scope") or "").split())
+    if "email" in scopes_set:
         body["email"] = user.email
         body["email_verified"] = user.email_verified
+    if "idp_roles" in scopes_set or "roles" in scopes_set:
+        from idp.roles import get_user_roles
+
+        body["idp_roles"] = await get_user_roles(session, user.id)
     return body

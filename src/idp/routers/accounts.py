@@ -27,6 +27,7 @@ from idp.html import page
 from idp.mail import send_mail
 from idp.models import EmailToken, User
 from idp.ratelimit import allow
+from idp.roles import apply_preassigned_roles
 from idp.sessions import clear_session_cookie, create_session, load_session, set_session_cookie
 from idp.settings import Settings
 
@@ -91,6 +92,7 @@ async def register(
     user = User(email=email_n, password_hash=hash_password(settings, password), email_verified=False)
     session.add(user)
     await session.flush()
+    await apply_preassigned_roles(session, user.id, email_n)
     code = generate_otp(6)
     session.add(
         EmailToken(
@@ -215,6 +217,7 @@ async def verify_email(
 
     user.email_verified = True
     row.consumed_at = now
+    await apply_preassigned_roles(session, user.id, email_n)
     await audit(session, "email_verified", user_id=user.id, ip=ip_of(request))
 
     # ponytail: automatically sign in verified user and redirect to after-login target
@@ -357,6 +360,7 @@ async def login(
     user.locked_until = None
     if new_hash:
         user.password_hash = new_hash
+    await apply_preassigned_roles(session, user.id, email_n)
     existing = await load_session(session, settings, request.cookies.get(settings.cookie_name))
     raw = await create_session(
         session,

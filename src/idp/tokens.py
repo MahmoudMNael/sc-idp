@@ -32,6 +32,7 @@ ALLOWED_CLAIMS = frozenset(
         "typ",
         "email",
         "email_verified",
+        "idp_roles",
     }
 )
 
@@ -140,9 +141,14 @@ async def _mint_pair(
     }
     if nonce:
         id_claims["nonce"] = nonce
-    if "email" in scope.split():
+    scopes_set = set(scope.split())
+    if "email" in scopes_set:
         id_claims["email"] = user.email
         id_claims["email_verified"] = user.email_verified
+    if "idp_roles" in scopes_set or "roles" in scopes_set:
+        from idp.roles import get_user_roles
+
+        id_claims["idp_roles"] = await get_user_roles(session, user.id)
     id_token = mint_idp_jwt(id_claims, key)
     refresh_raw = random_token(48)
     row = RefreshToken(
