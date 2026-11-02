@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     rate_limit_login: int = 10
     rate_limit_register: int = 5
     rate_limit_token: int = 30
+    otp_ttl: int = 600
+    otp_max_attempts: int = 5
 
     mail_backend: str = "console"
     smtp_host: str = ""
