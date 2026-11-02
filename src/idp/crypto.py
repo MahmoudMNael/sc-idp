@@ -105,3 +105,14 @@ def csrf_ok(secret_key: str, cookie: str | None, form: str | None) -> bool:
 def at_hash(access_token: str) -> str:
     digest = hashlib.sha256(access_token.encode("ascii")).digest()
     return base64.urlsafe_b64encode(digest[: len(digest) // 2]).rstrip(b"=").decode("ascii")
+
+
+def generate_otp(digits: int = 6) -> str:
+    # ponytail: secrets.randbelow is stdlib crypto-safe PRNG, zero-padded to required digits.
+    return f"{secrets.randbelow(10**digits):0{digits}d}"
+
+
+def hash_otp(pepper: str, user_id: object, purpose: str, code: str) -> str:
+    # ponytail: bind user_id + purpose to avoid collision on 6-digit space across users/purposes.
+    return hash_token(pepper, f"{user_id}:{purpose}:{code.strip()}")
+

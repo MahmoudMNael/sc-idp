@@ -141,13 +141,58 @@ def main() -> None:
         assert evil.status_code == 400
         assert "evil.test" not in (evil.headers.get("location") or "")
 
+        sent_emails = []
+        import idp.routers.accounts as accounts_mod
+        orig_send_mail = accounts_mod.send_mail
+
+        def fake_send_mail(settings, to, subject, body):
+            sent_emails.append({"to": to, "subject": subject, "body": body})
+            orig_send_mail(settings, to, subject, body)
+
+        accounts_mod.send_mail = fake_send_mail
+
         reg = c.get("/register")
         r = c.post(
             "/register",
             data={"email": email, "password": password, "csrf_token": csrf_token(reg.text)},
             follow_redirects=False,
         )
-        assert r.status_code == 200, r.text
+        assert r.status_code == 303, r.text
+        assert "/verify-email" in r.headers["location"]
+
+        # unverified user blocked at login
+        bad_login = c.post(
+            "/login",
+            data={"email": email, "password": password, "csrf_token": csrf_token(c.get("/login").text)},
+            follow_redirects=False,
+        )
+        assert bad_login.status_code == 403, bad_login.text
+        assert "verify your email" in bad_login.text.lower()
+
+        # extract OTP and test verification
+        assert sent_emails, "No email sent"
+        otp_m = re.search(r"code is:\s*([0-9]{6})", sent_emails[-1]["body"])
+        assert otp_m, sent_emails[-1]["body"]
+        otp = otp_m.group(1)
+
+        # wrong OTP
+        verify_page = c.get(r.headers["location"])
+        bad_otp = c.post(
+            "/verify-email",
+            data={"email": email, "code": "000000", "csrf_token": csrf_token(verify_page.text)},
+            follow_redirects=False,
+        )
+        assert bad_otp.status_code == 400
+        assert "Invalid or expired" in bad_otp.text
+
+        # valid OTP
+        good_otp = c.post(
+            "/verify-email",
+            data={"email": email, "code": otp, "csrf_token": csrf_token(bad_otp.text)},
+            follow_redirects=False,
+        )
+        assert good_otp.status_code == 303
+        c.get("/logout", follow_redirects=False)
 
         def login_and_code(client_id: str, redirect: str, prompt: str | None = None) -> tuple[str, str]:
             verifier, challenge = pkce()
@@ -406,6 +451,109 @@ def main() -> None:
         )
         assert silent.status_code == 302
         assert "login_required" in silent.headers["location"]
+
+        # forgot password 2-step OTP flow
+        forgot_page = c.get("/forgot-password")
+        f = c.post(
+            "/forgot-password",
+            data={"email": email, "csrf_token": csrf_token(forgot_page.text)},
+            follow_redirects=False,
+        )
+        assert f.status_code == 303
+        assert "/reset-password/verify" in f.headers["location"]
+
+        reset_m = re.search(r"code is:\s*([0-9]{6})", sent_emails[-1]["body"])
+        assert reset_m, sent_emails[-1]["body"]
+        reset_otp = reset_m.group(1)
+
+        reset_verify_page = c.get(f.headers["location"])
+        # wrong reset OTP
+        bad_reset_otp = c.post(
+            "/reset-password/verify",
+            data={"email": email, "code": "000000", "csrf_token": csrf_token(reset_verify_page.text)},
+            follow_redirects=False,
+        )
+        assert bad_reset_otp.status_code == 400
+
+        # valid reset OTP -> redirects to step 2 with ticket
+        good_reset_otp = c.post(
+            "/reset-password/verify",
+            data={"email": email, "code": reset_otp, "csrf_token": csrf_token(bad_reset_otp.text)},
+            follow_redirects=False,
+        )
+        assert good_reset_otp.status_code == 303
+        assert "/reset-password?ticket=" in good_reset_otp.headers["location"]
+        ticket = parse_qs(urlparse(good_reset_otp.headers["location"]).query)["ticket"][0]
+
+        # step 2: set new password
+        reset_page = c.get(good_reset_otp.headers["location"])
+        new_password = "new-correct-horse-battery"
+        reset_done = c.post(
+            "/reset-password",
+            data={"ticket": ticket, "password": new_password, "csrf_token": csrf_token(reset_page.text)},
+            follow_redirects=False,
+        )
+        assert reset_done.status_code == 303
+        assert "/login" in reset_done.headers["location"]
+
+        # sign in with new password
+        new_login = c.post(
+            "/login",
+            data={"email": email, "password": new_password, "csrf_token": csrf_token(c.get("/login").text)},
+            follow_redirects=False,
+        )
+        assert new_login.status_code == 303
+
+        # OTP edge cases: resend, max attempt limit, and replay
+        email2 = f"user2-{secrets.token_hex(4)}@example.test"
+        reg2 = c.get("/register")
+        r2 = c.post(
+            "/register",
+            data={"email": email2, "password": password, "csrf_token": csrf_token(reg2.text)},
+            follow_redirects=False,
+        )
+        assert r2.status_code == 303
+        v2_page = c.get(r2.headers["location"])
+
+        # test resend
+        resend_resp = c.post(
+            "/verify-email/resend",
+            data={"email": email2, "csrf_token": csrf_token(v2_page.text)},
+            follow_redirects=False,
+        )
+        assert resend_resp.status_code == 200
+        assert "A new verification code has been sent." in resend_resp.text
+        otp2_m = re.search(r"code is:\s*([0-9]{6})", sent_emails[-1]["body"])
+        assert otp2_m
+        otp2 = otp2_m.group(1)
+
+        # test max attempts (5 invalid tries allowed, 6th triggers 429)
+        curr_page = resend_resp
+        for _ in range(5):
+            curr_page = c.post(
+                "/verify-email",
+                data={"email": email2, "code": "000000", "csrf_token": csrf_token(curr_page.text)},
+                follow_redirects=False,
+            )
+            assert curr_page.status_code == 400
+
+        # 6th attempt is rate-limited
+        curr_page = c.post(
+            "/verify-email",
+            data={"email": email2, "code": "000000", "csrf_token": csrf_token(curr_page.text)},
+            follow_redirects=False,
+        )
+        assert curr_page.status_code == 429
+        assert "Too many failed attempts" in curr_page.text
+
+        # test replaying consumed OTP fails
+        replay_resp = c.post(
+            "/verify-email",
+            data={"email": email, "code": otp, "csrf_token": csrf_token(c.get("/verify-email").text)},
+            follow_redirects=False,
+        )
+        assert replay_resp.status_code == 400
+        assert "Invalid or expired" in replay_resp.text
 
     print("ok")
 

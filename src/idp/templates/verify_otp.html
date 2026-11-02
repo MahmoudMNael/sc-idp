@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block body %}
+<h1>{{ heading }}</h1>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% if message %}<p class="ok">{{ message }}</p>{% endif %}
+<p class="muted">{{ description }}</p>
+<form method="post" action="{{ action }}" autocomplete="one-time-code">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <input type="hidden" name="email" value="{{ email }}">
+  {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+  <label for="code">6-digit code</label>
+  <input id="code" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required autofocus>
+  <button type="submit">Verify</button>
+</form>
+<form method="post" action="{{ resend_action }}" style="margin-top: 1rem;">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <input type="hidden" name="email" value="{{ email }}">
+  {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+  <button type="submit" class="secondary">Resend code</button>
+</form>
+{% endblock %}

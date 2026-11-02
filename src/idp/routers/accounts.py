@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
@@ -12,6 +13,8 @@ from idp.audit import audit
 from idp.crypto import (
     csrf_ok,
     dummy_verify,
+    generate_otp,
+    hash_otp,
     hash_password,
     hash_token,
     random_token,
@@ -61,8 +64,8 @@ async def home(request: Request, settings: Settings = s_dep):
 
 
 @router.get("/register")
-async def register_form(request: Request, settings: Settings = s_dep):
-    return page(request, settings, "register.html", email="", error=None)
+async def register_form(request: Request, next: str = "", settings: Settings = s_dep):
+    return page(request, settings, "register.html", email="", next=next, error=None)
 
 
 @router.post("/register")
@@ -73,71 +76,228 @@ async def register(
     email: str = Form(""),
     password: str = Form(""),
     csrf_token: str = Form(""),
+    next: str = Form(""),
 ):
     if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
         return _csrf_fail(request, settings)
     if not await _rate(session, settings, "register", ip_of(request), settings.rate_limit_register):
-        return page(request, settings, "register.html", status=429, email=email, error="Too many attempts. Try later.")
+        return page(request, settings, "register.html", status=429, email=email, next=next, error="Too many attempts. Try later.")
     email_n = email.strip().lower()
     if "@" not in email_n or len(password) < 8:
-        return page(request, settings, "register.html", status=400, email=email, error="Valid email and password (8+ characters) required.")
+        return page(request, settings, "register.html", status=400, email=email, next=next, error="Valid email and password (8+ characters) required.")
     exists = (await session.execute(select(User.id).where(User.email == email_n))).scalar_one_or_none()
     if exists:
-        return page(request, settings, "register.html", status=400, email=email, error="Could not create that account.")
-    user = User(email=email_n, password_hash=hash_password(settings, password))
+        return page(request, settings, "register.html", status=400, email=email, next=next, error="Could not create that account.")
+    user = User(email=email_n, password_hash=hash_password(settings, password), email_verified=False)
     session.add(user)
     await session.flush()
-    raw = random_token(32)
+    code = generate_otp(6)
     session.add(
         EmailToken(
-            token_hash=hash_token(settings.token_hash_pepper, raw),
+            token_hash=hash_otp(settings.token_hash_pepper, user.id, "verify_email", code),
             user_id=user.id,
             purpose="verify_email",
-            expires_at=datetime.now(UTC) + timedelta(hours=24),
+            expires_at=datetime.now(UTC) + timedelta(seconds=settings.otp_ttl),
         )
     )
     send_mail(
         settings,
         email_n,
         "Verify your email",
-        f"Confirm your account: {settings.mail_link_base}/verify-email?token={raw}",
+        f"Your verification code is: {code}\nThis code expires in 10 minutes.",
     )
     await audit(session, "register", user_id=user.id, ip=ip_of(request))
-    return page(
-        request,
-        settings,
-        "message.html",
-        title="Check your email",
-        message="If the address is valid, a verification link is on its way. You can sign in now.",
-    )
+    query = {"email": email_n}
+    if next:
+        query["next"] = next
+    return RedirectResponse(f"/verify-email?{urlencode(query)}", status_code=303)
 
 
 @router.get("/verify-email")
-async def verify_email(
+async def verify_email_form(
     request: Request,
-    token: str = "",
-    session: AsyncSession = db_dep,
+    email: str = "",
+    next: str = "",
     settings: Settings = s_dep,
 ):
+    return page(
+        request,
+        settings,
+        "verify_otp.html",
+        title="Verify your email",
+        heading="Verify your email",
+        description=f"We sent a 6-digit code to {email}." if email else "Enter the verification code sent to your email.",
+        action="/verify-email",
+        resend_action="/verify-email/resend",
+        email=email,
+        next=next,
+        error=None,
+        message=None,
+    )
+
+
+@router.post("/verify-email")
+async def verify_email(
+    request: Request,
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+    email: str = Form(""),
+    code: str = Form(""),
+    csrf_token: str = Form(""),
+    next: str = Form(""),
+):
+    if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
+        return _csrf_fail(request, settings)
+    email_n = email.strip().lower()
+    user = (await session.execute(select(User).where(User.email == email_n))).scalar_one_or_none()
+    now = datetime.now(UTC)
+    if user is None:
+        return page(
+            request,
+            settings,
+            "verify_otp.html",
+            status=400,
+            title="Verify your email",
+            heading="Verify your email",
+            description=f"We sent a 6-digit code to {email_n}." if email_n else "Enter the verification code sent to your email.",
+            action="/verify-email",
+            resend_action="/verify-email/resend",
+            email=email_n,
+            next=next,
+            error="Invalid or expired verification code.",
+            message=None,
+        )
+
+    if not await allow(session, f"otp_attempt:{user.id}", settings.otp_max_attempts, settings.otp_ttl):
+        return page(
+            request,
+            settings,
+            "verify_otp.html",
+            status=429,
+            title="Verify your email",
+            heading="Verify your email",
+            description=f"We sent a 6-digit code to {email_n}.",
+            action="/verify-email",
+            resend_action="/verify-email/resend",
+            email=email_n,
+            next=next,
+            error="Too many failed attempts. Please request a new code.",
+            message=None,
+        )
+
+    expected_hash = hash_otp(settings.token_hash_pepper, user.id, "verify_email", code)
     row = (
         await session.execute(
-            select(EmailToken).where(EmailToken.token_hash == hash_token(settings.token_hash_pepper, token))
+            select(EmailToken).where(
+                EmailToken.token_hash == expected_hash,
+                EmailToken.user_id == user.id,
+                EmailToken.purpose == "verify_email",
+            )
         )
     ).scalar_one_or_none()
-    now = datetime.now(UTC)
-    if row is None or row.consumed_at or row.purpose != "verify_email" or row.expires_at < now:
-        return page(request, settings, "error.html", status=400, error="Invalid or expired verification link.")
-    user = await session.get(User, row.user_id)
-    if user:
-        user.email_verified = True
+
+    if row is None or row.consumed_at or row.expires_at < now:
+        return page(
+            request,
+            settings,
+            "verify_otp.html",
+            status=400,
+            title="Verify your email",
+            heading="Verify your email",
+            description=f"We sent a 6-digit code to {email_n}.",
+            action="/verify-email",
+            resend_action="/verify-email/resend",
+            email=email_n,
+            next=next,
+            error="Invalid or expired verification code.",
+            message=None,
+        )
+
+    user.email_verified = True
     row.consumed_at = now
-    await audit(session, "email_verified", user_id=row.user_id, ip=ip_of(request))
-    return page(request, settings, "message.html", title="Email verified", message="You can sign in now.")
+    await audit(session, "email_verified", user_id=user.id, ip=ip_of(request))
+
+    # ponytail: automatically sign in verified user and redirect to after-login target
+    existing = await load_session(session, settings, request.cookies.get(settings.cookie_name))
+    raw = await create_session(
+        session,
+        settings,
+        user,
+        ["pwd"],
+        ip=ip_of(request),
+        user_agent=request.headers.get("user-agent"),
+        replace=existing,
+    )
+    dest = after_login_target(settings, next)
+    response = RedirectResponse(dest, status_code=303)
+    set_session_cookie(response, settings, raw)
+    return response
+
+
+@router.post("/verify-email/resend")
+async def verify_email_resend(
+    request: Request,
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+    email: str = Form(""),
+    csrf_token: str = Form(""),
+    next: str = Form(""),
+):
+    if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
+        return _csrf_fail(request, settings)
+    email_n = email.strip().lower()
+    user = (await session.execute(select(User).where(User.email == email_n))).scalar_one_or_none()
+    if user and not user.email_verified:
+        if not await allow(session, f"otp_resend:{user.id}", 3, 600):
+            return page(
+                request,
+                settings,
+                "verify_otp.html",
+                status=429,
+                title="Verify your email",
+                heading="Verify your email",
+                description=f"We sent a 6-digit code to {email_n}.",
+                action="/verify-email",
+                resend_action="/verify-email/resend",
+                email=email_n,
+                next=next,
+                error="Too many resend attempts. Please wait a few minutes.",
+                message=None,
+            )
+        code = generate_otp(6)
+        session.add(
+            EmailToken(
+                token_hash=hash_otp(settings.token_hash_pepper, user.id, "verify_email", code),
+                user_id=user.id,
+                purpose="verify_email",
+                expires_at=datetime.now(UTC) + timedelta(seconds=settings.otp_ttl),
+            )
+        )
+        send_mail(
+            settings,
+            email_n,
+            "Verify your email",
+            f"Your verification code is: {code}\nThis code expires in 10 minutes.",
+        )
+    return page(
+        request,
+        settings,
+        "verify_otp.html",
+        title="Verify your email",
+        heading="Verify your email",
+        description=f"We sent a 6-digit code to {email_n}.",
+        action="/verify-email",
+        resend_action="/verify-email/resend",
+        email=email_n,
+        next=next,
+        error=None,
+        message="A new verification code has been sent.",
+    )
 
 
 @router.get("/login")
-async def login_form(request: Request, next: str = "", settings: Settings = s_dep):
-    return page(request, settings, "login.html", next=next, email="", error=None)
+async def login_form(request: Request, next: str = "", message: str = "", settings: Settings = s_dep):
+    return page(request, settings, "login.html", next=next, message=message, email="", error=None, verify_url=None)
 
 
 @router.post("/login")
@@ -153,18 +313,18 @@ async def login(
     if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
         return _csrf_fail(request, settings)
     if not await _rate(session, settings, "login", ip_of(request), settings.rate_limit_login):
-        return page(request, settings, "login.html", status=429, next=next, email=email, error="Too many attempts. Try later.")
+        return page(request, settings, "login.html", status=429, next=next, message=None, email=email, error="Too many attempts. Try later.", verify_url=None)
     email_n = email.strip().lower()
     user = (await session.execute(select(User).where(User.email == email_n))).scalar_one_or_none()
     now = datetime.now(UTC)
     if user is None or not user.is_active:
         dummy_verify(settings, password)
         await audit(session, "login_failure", ip=ip_of(request), detail={"reason": "unknown"})
-        return page(request, settings, "login.html", status=401, next=next, email=email, error=LOGIN_ERROR)
+        return page(request, settings, "login.html", status=401, next=next, message=None, email=email, error=LOGIN_ERROR, verify_url=None)
     if user.locked_until and user.locked_until > now:
         dummy_verify(settings, password)
         await audit(session, "login_failure", user_id=user.id, ip=ip_of(request), detail={"reason": "locked"})
-        return page(request, settings, "login.html", status=401, next=next, email=email, error=LOGIN_ERROR)
+        return page(request, settings, "login.html", status=401, next=next, message=None, email=email, error=LOGIN_ERROR, verify_url=None)
     ok, new_hash = verify_password(settings, user.password_hash, password)
     if not ok:
         user.failed_login_count += 1
@@ -172,7 +332,27 @@ async def login(
             user.locked_until = now + timedelta(seconds=settings.lockout_seconds)
             user.failed_login_count = 0
         await audit(session, "login_failure", user_id=user.id, ip=ip_of(request), detail={"reason": "password"})
-        return page(request, settings, "login.html", status=401, next=next, email=email, error=LOGIN_ERROR)
+        return page(request, settings, "login.html", status=401, next=next, message=None, email=email, error=LOGIN_ERROR, verify_url=None)
+
+    # Gate unverified email
+    if not user.email_verified:
+        await audit(session, "login_failure", user_id=user.id, ip=ip_of(request), detail={"reason": "unverified"})
+        verify_query = {"email": email_n}
+        if next:
+            verify_query["next"] = next
+        verify_url = f"/verify-email?{urlencode(verify_query)}"
+        return page(
+            request,
+            settings,
+            "login.html",
+            status=403,
+            next=next,
+            message=None,
+            email=email,
+            error="Please verify your email before signing in.",
+            verify_url=verify_url,
+        )
+
     user.failed_login_count = 0
     user.locked_until = None
     if new_hash:
@@ -214,30 +394,198 @@ async def forgot(
         return _csrf_fail(request, settings)
     email_n = email.strip().lower()
     user = (await session.execute(select(User).where(User.email == email_n))).scalar_one_or_none()
-    msg = "If that account exists, a reset link is on its way."
     if user and user.is_active:
-        raw = random_token(32)
+        if await allow(session, f"pwd_otp_send:{user.id}", 3, 600):
+            code = generate_otp(6)
+            session.add(
+                EmailToken(
+                    token_hash=hash_otp(settings.token_hash_pepper, user.id, "reset_password", code),
+                    user_id=user.id,
+                    purpose="reset_password",
+                    expires_at=datetime.now(UTC) + timedelta(seconds=settings.otp_ttl),
+                )
+            )
+            send_mail(
+                settings,
+                email_n,
+                "Reset your password",
+                f"Your password reset code is: {code}\nThis code expires in 10 minutes.",
+            )
+            await audit(session, "password_reset_requested", user_id=user.id, ip=ip_of(request))
+    # ponytail: avoid email enumeration by redirecting to verify screen regardless
+    return RedirectResponse(f"/reset-password/verify?email={email_n}", status_code=303)
+
+
+@router.get("/reset-password/verify")
+async def reset_verify_form(
+    request: Request,
+    email: str = "",
+    settings: Settings = s_dep,
+):
+    return page(
+        request,
+        settings,
+        "verify_otp.html",
+        title="Reset password",
+        heading="Enter reset code",
+        description=f"We sent a 6-digit code to {email}." if email else "Enter the 6-digit password reset code.",
+        action="/reset-password/verify",
+        resend_action="/reset-password/resend",
+        email=email,
+        next="",
+        error=None,
+        message=None,
+    )
+
+
+@router.post("/reset-password/verify")
+async def reset_verify(
+    request: Request,
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+    email: str = Form(""),
+    code: str = Form(""),
+    csrf_token: str = Form(""),
+):
+    if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
+        return _csrf_fail(request, settings)
+    email_n = email.strip().lower()
+    user = (await session.execute(select(User).where(User.email == email_n))).scalar_one_or_none()
+    now = datetime.now(UTC)
+    if user is None:
+        return page(
+            request,
+            settings,
+            "verify_otp.html",
+            status=400,
+            title="Reset password",
+            heading="Enter reset code",
+            description=f"We sent a 6-digit code to {email_n}." if email_n else "Enter the 6-digit password reset code.",
+            action="/reset-password/verify",
+            resend_action="/reset-password/resend",
+            email=email_n,
+            next="",
+            error="Invalid or expired reset code.",
+            message=None,
+        )
+
+    if not await allow(session, f"pwd_otp_attempt:{user.id}", settings.otp_max_attempts, settings.otp_ttl):
+        return page(
+            request,
+            settings,
+            "verify_otp.html",
+            status=429,
+            title="Reset password",
+            heading="Enter reset code",
+            description=f"We sent a 6-digit code to {email_n}.",
+            action="/reset-password/verify",
+            resend_action="/reset-password/resend",
+            email=email_n,
+            next="",
+            error="Too many failed attempts. Please request a new code.",
+            message=None,
+        )
+
+    expected_hash = hash_otp(settings.token_hash_pepper, user.id, "reset_password", code)
+    row = (
+        await session.execute(
+            select(EmailToken).where(
+                EmailToken.token_hash == expected_hash,
+                EmailToken.user_id == user.id,
+                EmailToken.purpose == "reset_password",
+            )
+        )
+    ).scalar_one_or_none()
+
+    if row is None or row.consumed_at or row.expires_at < now:
+        return page(
+            request,
+            settings,
+            "verify_otp.html",
+            status=400,
+            title="Reset password",
+            heading="Enter reset code",
+            description=f"We sent a 6-digit code to {email_n}.",
+            action="/reset-password/verify",
+            resend_action="/reset-password/resend",
+            email=email_n,
+            next="",
+            error="Invalid or expired reset code.",
+            message=None,
+        )
+
+    row.consumed_at = now
+    # Signed ticket valid for 10 minutes to set new password in step 2
+    ticket = sign(settings.secret_key, "pwd_reset_ticket", str(user.id))
+    return RedirectResponse(f"/reset-password?ticket={ticket}", status_code=303)
+
+
+@router.post("/reset-password/resend")
+async def reset_resend(
+    request: Request,
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+    email: str = Form(""),
+    csrf_token: str = Form(""),
+):
+    if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
+        return _csrf_fail(request, settings)
+    email_n = email.strip().lower()
+    user = (await session.execute(select(User).where(User.email == email_n))).scalar_one_or_none()
+    if user and user.is_active:
+        if not await allow(session, f"pwd_otp_resend:{user.id}", 3, 600):
+            return page(
+                request,
+                settings,
+                "verify_otp.html",
+                status=429,
+                title="Reset password",
+                heading="Enter reset code",
+                description=f"We sent a 6-digit code to {email_n}.",
+                action="/reset-password/verify",
+                resend_action="/reset-password/resend",
+                email=email_n,
+                next="",
+                error="Too many resend attempts. Please wait a few minutes.",
+                message=None,
+            )
+        code = generate_otp(6)
         session.add(
             EmailToken(
-                token_hash=hash_token(settings.token_hash_pepper, raw),
+                token_hash=hash_otp(settings.token_hash_pepper, user.id, "reset_password", code),
                 user_id=user.id,
                 purpose="reset_password",
-                expires_at=datetime.now(UTC) + timedelta(hours=1),
+                expires_at=datetime.now(UTC) + timedelta(seconds=settings.otp_ttl),
             )
         )
         send_mail(
             settings,
             email_n,
             "Reset your password",
-            f"Reset: {settings.mail_link_base}/reset-password?token={raw}",
+            f"Your password reset code is: {code}\nThis code expires in 10 minutes.",
         )
-        await audit(session, "password_reset_requested", user_id=user.id, ip=ip_of(request))
-    return page(request, settings, "forgot.html", message=msg)
+    return page(
+        request,
+        settings,
+        "verify_otp.html",
+        title="Reset password",
+        heading="Enter reset code",
+        description=f"We sent a 6-digit code to {email_n}.",
+        action="/reset-password/verify",
+        resend_action="/reset-password/resend",
+        email=email_n,
+        next="",
+        error=None,
+        message="A new reset code has been sent.",
+    )
 
 
 @router.get("/reset-password")
-async def reset_form(request: Request, token: str = "", settings: Settings = s_dep):
-    return page(request, settings, "reset.html", token=token, error=None)
+async def reset_form(request: Request, ticket: str = "", settings: Settings = s_dep):
+    user_id_str = unsign(settings.secret_key, "pwd_reset_ticket", ticket, max_age=600)
+    if not user_id_str:
+        return page(request, settings, "error.html", status=400, error="Invalid or expired reset session. Please request a new code.")
+    return page(request, settings, "reset.html", ticket=ticket, error=None)
 
 
 @router.post("/reset-password")
@@ -245,28 +593,22 @@ async def reset(
     request: Request,
     session: AsyncSession = db_dep,
     settings: Settings = s_dep,
-    token: str = Form(""),
+    ticket: str = Form(""),
     password: str = Form(""),
     csrf_token: str = Form(""),
 ):
     if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
         return _csrf_fail(request, settings)
+    user_id_str = unsign(settings.secret_key, "pwd_reset_ticket", ticket, max_age=600)
+    if not user_id_str:
+        return page(request, settings, "error.html", status=400, error="Invalid or expired reset session. Please request a new code.")
     if len(password) < 8:
-        return page(request, settings, "reset.html", token=token, error="Password must be 8+ characters.")
-    row = (
-        await session.execute(
-            select(EmailToken).where(EmailToken.token_hash == hash_token(settings.token_hash_pepper, token))
-        )
-    ).scalar_one_or_none()
-    now = datetime.now(UTC)
-    if row is None or row.consumed_at or row.purpose != "reset_password" or row.expires_at < now:
-        return page(request, settings, "reset.html", status=400, token=token, error="Invalid or expired reset link.")
-    user = await session.get(User, row.user_id)
-    if user is None:
-        return page(request, settings, "reset.html", status=400, token=token, error="Invalid or expired reset link.")
+        return page(request, settings, "reset.html", ticket=ticket, error="Password must be 8+ characters.")
+    user = await session.get(User, uuid.UUID(user_id_str))
+    if user is None or not user.is_active:
+        return page(request, settings, "error.html", status=400, error="Invalid or expired reset session.")
     user.password_hash = hash_password(settings, password)
     user.failed_login_count = 0
     user.locked_until = None
-    row.consumed_at = now
     await audit(session, "password_reset", user_id=user.id, ip=ip_of(request))
-    return page(request, settings, "message.html", title="Password updated", message="You can sign in with the new password.")
+    return RedirectResponse("/login?message=Password+updated.+Please+sign+in.", status_code=303)
