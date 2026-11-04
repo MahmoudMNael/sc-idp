@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
 
+from pathlib import Path
+from starlette.staticfiles import StaticFiles
 from fastapi import FastAPI
 from sqlalchemy import text
 
@@ -38,6 +40,10 @@ app.include_router(accounts.router, tags=["account"])
 app.include_router(mfa.router, tags=["account"])
 app.include_router(logout.router, tags=["oidc"])
 app.include_router(admin.router, tags=["admin"])
+
+ASSETS_DIR = Path(__file__).resolve().parents[1] / "assets"
+if ASSETS_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
 
 
 @app.get("/healthz", tags=["ops"])

@@ -91,12 +91,47 @@ def main() -> None:
         h = c.get("/healthz")
         assert h.status_code == 200, h.text
 
-        disc = c.get("/.well-known/openid-configuration").json()
+        disc_resp = c.get("/.well-known/openid-configuration")
+        assert disc_resp.status_code == 200
+        assert disc_resp.headers["access-control-allow-origin"] == "*"
+        assert "public, max-age=" in disc_resp.headers["cache-control"]
+        disc = disc_resp.json()
+        assert disc["issuer"] == settings.public_base
+        assert disc["jwks_uri"] == f"{settings.public_base}/.well-known/jwks.json"
+        assert disc["authorization_endpoint"] == f"{settings.public_base}/authorize"
+        assert disc["token_endpoint"] == f"{settings.public_base}/token"
+        assert disc["userinfo_endpoint"] == f"{settings.public_base}/userinfo"
+        assert disc["end_session_endpoint"] == f"{settings.public_base}/logout"
         assert disc["response_types_supported"] == ["code"]
+        assert disc["response_modes_supported"] == ["query"]
         assert disc["code_challenge_methods_supported"] == ["S256"]
         assert disc["id_token_signing_alg_values_supported"] == ["RS256"]
         assert "idp_roles" in disc["scopes_supported"]
         assert "idp_roles" in disc["claims_supported"]
+        assert "at_hash" in disc["claims_supported"]
+
+        # RFC 8414 OAuth authorization server metadata alias
+        rfc8414_disc = c.get("/.well-known/oauth-authorization-server")
+        assert rfc8414_disc.status_code == 200
+        assert rfc8414_disc.json() == disc
+
+        # JWKS headers and alias check
+        jwks_resp = c.get("/.well-known/jwks.json")
+        assert jwks_resp.status_code == 200
+        assert jwks_resp.headers["access-control-allow-origin"] == "*"
+        assert "public, max-age=" in jwks_resp.headers["cache-control"]
+        jwks_data = jwks_resp.json()
+        assert "keys" in jwks_data and len(jwks_data["keys"]) >= 1
+        k0 = jwks_data["keys"][0]
+        assert k0["kty"] == "RSA"
+        assert k0["use"] == "sig"
+        assert k0["alg"] == "RS256"
+        assert "n" in k0 and "e" in k0 and "kid" in k0
+
+        # /.well-known/jwks alias returns same keys
+        jwks_alias = c.get("/.well-known/jwks")
+        assert jwks_alias.status_code == 200
+        assert jwks_alias.json() == jwks_data
 
         # 1. forbidden claims never mint
         key = RSAKey.generate_key(2048, private=True, parameters={"kid": "t", "alg": "RS256", "use": "sig"})
@@ -753,6 +788,106 @@ def main() -> None:
 
         sc_assigns = c.get(f"/admin/roles/assignments?email={sc_email}", headers=admin).json()
         assert "sc_member" in sc_assigns["user_roles"]
+
+        # 9. test admin client registration dashboard
+        # Static assets
+        logo_resp = c.get("/assets/logo.png")
+        assert logo_resp.status_code == 200
+        favicon_resp = c.get("/assets/favicon.svg")
+        assert favicon_resp.status_code == 200
+
+        # Currently c is logged in as sc_email (non-admin). Access should return 403
+        dash_forbidden = c.get("/admin/dashboard")
+        assert dash_forbidden.status_code == 403
+        assert "IdP admin role required" in dash_forbidden.text
+
+        # Log out -> unauthenticated access to /admin/dashboard redirects to /login
+        c.get("/logout", follow_redirects=False)
+        dash_anon = c.get("/admin/dashboard", follow_redirects=False)
+        assert dash_anon.status_code == 303
+        assert "/login?next=/admin/dashboard" in dash_anon.headers["location"]
+
+        # Admin access (vip_email) succeeds
+        vip_login = c.post(
+            "/login",
+            data={"email": vip_email, "password": password, "csrf_token": csrf_token(c.get("/login").text)},
+            follow_redirects=False,
+        )
+        assert vip_login.status_code == 303
+        dash_ok = c.get("/admin/dashboard")
+        assert dash_ok.status_code == 200
+        assert "OAUTH CLIENTS" in dash_ok.text
+        assert "REGISTER NEW CLIENT" in dash_ok.text
+
+        # Register a new client
+        new_client_name = "Payment Engine"
+        reg_resp = c.post(
+            "/admin/dashboard/clients",
+            data={
+                "name": new_client_name,
+                "redirect_uris": "https://payments.internal/callback\nhttp://localhost:4000/callback",
+                "post_logout_redirect_uris": "https://payments.internal/",
+                "scopes": ["openid", "email"],
+                "is_first_party": "true",
+                "csrf_token": csrf_token(dash_ok.text),
+            },
+        )
+        assert reg_resp.status_code == 200, f"Got {reg_resp.status_code}: {reg_resp.text}"
+        assert "registered successfully" in reg_resp.text
+        cid_match = re.search(r'id="revealed-cid"\s+readonly\s+value="([^"]+)"', reg_resp.text)
+        secret_match = re.search(r'id="revealed-secret"\s+readonly\s+value="([^"]+)"', reg_resp.text)
+        assert cid_match is not None and secret_match is not None
+        new_cid = cid_match.group(1)
+        new_secret = secret_match.group(1)
+
+        # Rotate secret
+        rotate_resp = c.post(
+            f"/admin/dashboard/clients/{new_cid}/rotate-secret",
+            data={"csrf_token": csrf_token(reg_resp.text)},
+        )
+        assert rotate_resp.status_code == 200
+        assert "New secret generated" in rotate_resp.text
+        rotated_secret = re.search(r'id="revealed-secret"\s+readonly\s+value="([^"]+)"', rotate_resp.text).group(1)
+        assert rotated_secret != new_secret
+
+        # Toggle status to inactive
+        toggle_resp = c.post(
+            f"/admin/dashboard/clients/{new_cid}/toggle-status",
+            data={"csrf_token": csrf_token(rotate_resp.text)},
+            follow_redirects=False,
+        )
+        assert toggle_resp.status_code == 303
+        dash_after_toggle = c.get("/admin/dashboard")
+        assert "INACTIVE" in dash_after_toggle.text
+
+        # Toggle back to active
+        toggle_back = c.post(
+            f"/admin/dashboard/clients/{new_cid}/toggle-status",
+            data={"csrf_token": csrf_token(dash_after_toggle.text)},
+            follow_redirects=False,
+        )
+        assert toggle_back.status_code == 303
+
+        # Test OAuth PKCE flow with this newly registered client
+        new_code, new_verifier = login_and_code(
+            new_cid,
+            "https://payments.internal/callback",
+            login_email=vip_email,
+            login_password=password,
+        )
+        new_tok = c.post(
+            "/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": new_code,
+                "redirect_uri": "https://payments.internal/callback",
+                "code_verifier": new_verifier,
+                "client_id": new_cid,
+                "client_secret": rotated_secret,
+            },
+        )
+        assert new_tok.status_code == 200, new_tok.text
+        assert "access_token" in new_tok.json()
 
     print("ok")
 

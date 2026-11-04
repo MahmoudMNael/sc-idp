@@ -69,6 +69,9 @@ async def public_jwks(session: AsyncSession, settings: Settings) -> dict:
         if row.status == "retiring" and row.retire_after is not None and row.retire_after < cutoff:
             continue
         keys.append(row.public_jwk)
+    if not keys:
+        active_key = await ensure_active_key(session, settings)
+        keys = [active_key.as_dict(private=False)]
     _pub = {"keys": keys}
     _pub_at = now
     return _pub
