@@ -2,16 +2,19 @@
 
 Central OpenID Connect provider: **who the user is**. Products decide **what they can do**.
 
+---
+
 ## Documentation
 
-- **Product Integration**: [docs/integrating-a-product.md](docs/integrating-a-product.md) — OIDC wire protocol, tokens, scopes, claims, and redirect contracts.
-- **IdP Technical Reference**: [docs/idp-reference.md](docs/idp-reference.md) — Subsystem architecture, schema, tokens, and theory.
-- **Authentication & User Flows**: [docs/flows.md](docs/flows.md) — 6-digit OTP verification, password reset, MFA step-up, cancellation, and silent SSO.
-- **Admin Guide & Dashboard**: [docs/admin-guide.md](docs/admin-guide.md) — Web Admin Dashboard (`/admin/dashboard`), REST admin API, client secrets, and role assignments.
-- **Core Architecture & Operations**:
-  - [Architecture](docs/architecture.md)
-  - [Security](docs/security.md)
-  - [Operations](docs/operations.md)
+| Document | Purpose |
+| --- | --- |
+| [Product Integration](docs/integrating-a-product.md) | OIDC wire protocol, tokens, scopes, claims, and redirect contracts |
+| [IdP Technical Reference](docs/idp-reference.md) | Subsystem architecture, database schema, tokens, and theory |
+| [Authentication & User Flows](docs/flows.md) | 6-digit OTP verification, password reset, MFA step-up, cancellation, and silent SSO |
+| [Admin Guide & Dashboard](docs/admin-guide.md) | Web Admin Dashboard (`/admin/dashboard`), REST admin API, client secrets, and role assignments |
+| [Architecture](docs/architecture.md) | Token layer split, two-tier role architecture, and silent SSO mechanics |
+| [Security](docs/security.md) | Threat model, non-negotiables, token hashing, and rate limiting |
+| [Operations](docs/operations.md) | Environment configuration, migrations, key rotation, and runbooks |
 
 ---
 

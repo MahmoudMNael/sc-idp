@@ -1,5 +1,7 @@
 # Integrating a Product with sc-idp
 
+Related docs: [IdP Technical Reference](idp-reference.md) · [Authentication & User Flows](flows.md) · [Admin Guide](admin-guide.md) · [Architecture](architecture.md) · [Security](security.md)
+
 `sc-idp` is a **confidential-client** OpenID Connect (OIDC) provider. Your **product backend** is the OAuth client. The product **frontend never talks directly to the IdP as an API** and **never handles IdP tokens**.
 
 You do **not** build login, registration, password reset, or MFA forms. Those interactions live exclusively on the IdP. Your UI only triggers "Sign in" / "Sign out" navigations and then calls **your** APIs using **your own** product tokens.

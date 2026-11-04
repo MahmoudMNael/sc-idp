@@ -1,5 +1,7 @@
 # Admin Guide & Dashboard
 
+Related docs: [IdP Technical Reference](idp-reference.md) · [Operations](operations.md) · [Security](security.md) · [Authentication & User Flows](flows.md)
+
 `sc-idp` provides two administration interfaces:
 1. **Web Admin Dashboard (`/admin/dashboard`)**: An interactive browser UI for administrators authenticated with an active session and the `admin` IdP role.
 2. **Admin REST API (`/admin/*`)**: Scriptable, headless endpoints authenticated via `Authorization: Bearer <IDP_ADMIN_API_KEY>`.

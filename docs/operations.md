@@ -1,5 +1,7 @@
 # Operations Runbook
 
+Related docs: [Admin Guide](admin-guide.md) · [Security](security.md) · [IdP Technical Reference](idp-reference.md) · [Architecture](architecture.md)
+
 ---
 
 ## 1. Environment Configuration

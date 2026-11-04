@@ -1,5 +1,7 @@
 # Authentication & User Flows
 
+Related docs: [Product Integration](integrating-a-product.md) · [IdP Technical Reference](idp-reference.md) · [Admin Guide](admin-guide.md) · [Security](security.md) · [Operations](operations.md)
+
 This document details every human and protocol lifecycle flow implemented by `sc-idp`: registration with OTP verification, password reset with OTP, authorization with cancellation, multi-factor authentication (TOTP), and browser session lifecycle (silent SSO).
 
 ---

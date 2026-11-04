@@ -1,5 +1,7 @@
 # Security Architecture & Threat Model
 
+Related docs: [IdP Technical Reference](idp-reference.md) · [Architecture](architecture.md) · [Authentication & User Flows](flows.md) · [Operations](operations.md)
+
 ---
 
 ## 1. Non-Negotiables

@@ -1,5 +1,7 @@
 # System Architecture
 
+Related docs: [Product Integration](integrating-a-product.md) · [IdP Technical Reference](idp-reference.md) · [Authentication & User Flows](flows.md) · [Security](security.md) · [Operations](operations.md)
+
 One IdP, many products, two token layers.
 
 ```mermaid
