@@ -1,22 +1,42 @@
 {% extends "base.html" %}
 {% block title %}{{ title }}{% endblock %}
-{% block body %}
-<h1>{{ heading }}</h1>
-{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
-{% if message %}<p class="ok">{{ message }}</p>{% endif %}
-<p class="muted">{{ description }}</p>
-<form method="post" action="{{ action }}" autocomplete="one-time-code">
-  <input type="hidden" name="csrf_token" value="{{ csrf }}">
-  <input type="hidden" name="email" value="{{ email }}">
-  {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
-  <label for="code">6-digit code</label>
-  <input id="code" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required autofocus>
-  <button type="submit">Verify</button>
-</form>
-<form method="post" action="{{ resend_action }}" style="margin-top: 1rem;">
-  <input type="hidden" name="csrf_token" value="{{ csrf }}">
-  <input type="hidden" name="email" value="{{ email }}">
-  {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
-  <button type="submit" class="secondary">Resend code</button>
-</form>
+{% block header %}{% endblock %}
+{% block content %}
+<main class="auth-viewport">
+  <div class="auth-card">
+    <a href="/"><img src="/assets/logo.png" alt="Short Circuit" class="auth-logo"></a>
+    <h1 class="auth-title">{{ heading }}</h1>
+    <p class="auth-subtitle">{{ description }}</p>
+
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+    {% if message %}<p class="ok">{{ message }}</p>{% endif %}
+
+    <form class="auth-form" method="post" action="{{ action }}" autocomplete="one-time-code">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="email" value="{{ email }}">
+      {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+
+      <label for="code">6-digit verification code</label>
+      <input id="code" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required autofocus style="text-align: center; font-family: var(--font-mono); font-size: 1.4rem; letter-spacing: 0.35em;" placeholder="000000">
+
+      <button type="submit" class="btn-block">Verify</button>
+    </form>
+
+    <form method="post" action="{{ resend_action }}" style="margin-top: 0.75rem;">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="email" value="{{ email }}">
+      {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+      <button type="submit" class="secondary btn-block">Resend code</button>
+    </form>
+
+    <div class="auth-footer">
+      <div>
+        <a href="/login{% if next %}?next={{ next }}{% endif %}">Back to sign in</a>
+      </div>
+      {% if cancel_url %}
+        <a href="{{ cancel_url }}" class="auth-cancel">Cancel and return to {{ client_name }}</a>
+      {% endif %}
+    </div>
+  </div>
+</main>
 {% endblock %}

@@ -1,7 +1,19 @@
 {% extends "base.html" %}
 {% block title %}Error{% endblock %}
-{% block body %}
-<h1>Request cannot continue</h1>
-<p class="error" role="alert">{{ error }}</p>
-{% if description %}<p class="muted">{{ description }}</p>{% endif %}
+{% block header %}{% endblock %}
+{% block content %}
+<main class="auth-viewport">
+  <div class="auth-card">
+    <a href="/"><img src="/assets/logo.png" alt="Short Circuit" class="auth-logo"></a>
+    <h1 class="auth-title">Error</h1>
+    <p class="auth-subtitle">The request could not be completed</p>
+
+    <p class="error" role="alert">{{ error }}</p>
+    {% if description %}<p class="muted" style="margin-bottom: 1.5rem;">{{ description }}</p>{% endif %}
+
+    <div style="margin-top: 1.5rem;">
+      <a href="/login" class="btn btn-block">Return to Sign In</a>
+    </div>
+  </div>
+</main>
 {% endblock %}

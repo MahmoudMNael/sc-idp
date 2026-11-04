@@ -122,6 +122,7 @@ async def authorize(
             client_name=client.name,
             scopes=params["scope"],
             next=nxt,
+            cancel_url=f"/cancel?next={nxt}",
         )
     return await _issue(session, settings, client, user, sess, params)
 
@@ -162,3 +163,22 @@ async def consent(
         "client_id": client.client_id,
     }
     return await _issue(session, settings, client, user, sess, params)
+
+
+@router.get("/cancel")
+async def cancel(
+    next: str = "",
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+):
+    query = load_next(settings, next)
+    if query:
+        from urllib.parse import parse_qs
+
+        parsed = {k: v[0] if v else "" for k, v in parse_qs(query, keep_blank_values=True).items()}
+        client = await _client(session, parsed.get("client_id"))
+        redirect_uri = parsed.get("redirect_uri")
+        if client and _redirect_ok(client, redirect_uri):
+            return oauth_redirect(redirect_uri, error="access_denied", state=parsed.get("state") or None)
+    return RedirectResponse("/", status_code=302)
+

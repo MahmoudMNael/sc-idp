@@ -9,7 +9,7 @@ from src.core.deps import db_dep, ip_of, s_dep
 from src.core.settings import Settings
 from src.html import page
 from src.models import MfaRecoveryCode, User
-from src.routers.accounts import after_login_target
+from src.routers.accounts import after_login_target, oauth_context
 from src.services.audit import audit
 from src.services.sessions import create_session, load_session, set_session_cookie
 
@@ -57,7 +57,8 @@ async def mfa_form(request: Request, next: str = "", settings: Settings = s_dep,
     sess, user = await _user_session(request, session, settings)
     if sess is None or user is None:
         return RedirectResponse("/login", status_code=302)
-    return page(request, settings, "mfa.html", next=next, error=None, action="/login/mfa")
+    client_name, cancel_url = await oauth_context(session, settings, next)
+    return page(request, settings, "mfa.html", next=next, client_name=client_name, cancel_url=cancel_url, error=None, action="/login/mfa")
 
 
 @router.post("/login/mfa")
@@ -76,7 +77,9 @@ async def mfa_submit(
         return RedirectResponse("/login", status_code=303)
     if not await _check_otp_or_recovery(session, settings, user, code):
         await audit(session, "mfa_failure", user_id=user.id, ip=ip_of(request))
-        return page(request, settings, "mfa.html", status=401, next=next, error="Invalid code.", action="/login/mfa")
+        client_name, cancel_url = await oauth_context(session, settings, next)
+        return page(request, settings, "mfa.html", status=401, next=next, client_name=client_name, cancel_url=cancel_url, error="Invalid code.", action="/login/mfa")
+
     raw = await create_session(
         session,
         settings,

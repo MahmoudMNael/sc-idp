@@ -889,7 +889,44 @@ def main() -> None:
         assert new_tok.status_code == 200, new_tok.text
         assert "access_token" in new_tok.json()
 
+        # Test OAuth UI context and /cancel redirect flow
+        v, ch = pkce()
+        cancel_state = "state-cancel-123"
+        az_cancel = c.get(
+            "/authorize",
+            params={
+                "client_id": client_a["client_id"],
+                "redirect_uri": "http://appa.test/callback",
+                "response_type": "code",
+                "scope": "openid email",
+                "code_challenge": ch,
+                "code_challenge_method": "S256",
+                "state": cancel_state,
+                "prompt": "login",
+            },
+            follow_redirects=False,
+        )
+        assert az_cancel.status_code == 302
+        login_target = az_cancel.headers["location"]
+        login_view = c.get(login_target)
+        assert login_view.status_code == 200
+        assert "to continue to" in login_view.text and ">A<" in login_view.text
+        nxt_val = parse_qs(urlparse(login_target).query).get("next", [""])[0]
+        assert f"/register?next={nxt_val}" in login_view.text
+        assert f"/forgot-password?next={nxt_val}" in login_view.text
+        assert f"/cancel?next={nxt_val}" in login_view.text
+
+        # Clicking cancel redirects to client callback with access_denied
+        cancel_resp = c.get(f"/cancel?next={nxt_val}", follow_redirects=False)
+        assert cancel_resp.status_code == 302
+        cancel_loc = cancel_resp.headers["location"]
+        assert cancel_loc.startswith("http://appa.test/callback")
+        cancel_query = parse_qs(urlparse(cancel_loc).query)
+        assert cancel_query.get("error") == ["access_denied"]
+        assert cancel_query.get("state") == [cancel_state]
+
     print("ok")
+
 
 
 if __name__ == "__main__":
