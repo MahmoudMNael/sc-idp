@@ -3,9 +3,9 @@ from pathlib import Path
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
-from src.crypto import new_csrf
-from src.sessions import set_csrf_cookie
-from src.settings import Settings
+from src.core.crypto import new_csrf
+from src.services.sessions import set_csrf_cookie
+from src.core.settings import Settings
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 

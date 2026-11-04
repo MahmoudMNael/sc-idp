@@ -2,7 +2,7 @@ from collections.abc import AsyncIterator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from src.settings import get_settings
+from src.core.settings import get_settings
 
 engine = None
 SessionLocal = None

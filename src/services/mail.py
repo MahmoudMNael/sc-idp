@@ -1,7 +1,7 @@
 import smtplib
 from email.message import EmailMessage
 
-from src.settings import Settings
+from src.core.settings import Settings
 
 
 def send_mail(settings: Settings, to: str, subject: str, body: str) -> None:

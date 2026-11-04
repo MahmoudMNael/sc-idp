@@ -3,14 +3,14 @@ from fastapi.responses import RedirectResponse
 from joserfc import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.audit import audit
-from src.deps import db_dep, ip_of, s_dep
+from src.core.deps import db_dep, ip_of, s_dep
+from src.core.keys import public_jwks, verify_key_set
+from src.core.oauth_errors import append_query
+from src.core.settings import Settings
 from src.html import page
-from src.keys import public_jwks, verify_key_set
 from src.models import OAuthClient
-from src.oauth_errors import append_query
-from src.sessions import clear_session_cookie, load_session
-from src.settings import Settings
+from src.services.audit import audit
+from src.services.sessions import clear_session_cookie, load_session
 
 router = APIRouter()
 

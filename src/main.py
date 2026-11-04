@@ -3,11 +3,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sqlalchemy import text
 
-from src import db
-from src.bootstrap import bootstrap_demo_clients
-from src.keys import ensure_active_key
+from src.core import db
+from src.services.bootstrap import bootstrap_demo_clients
+from src.core.keys import ensure_active_key
 from src.routers import accounts, admin, authorize, discovery, logout, mfa, token, userinfo
-from src.settings import get_settings
+from src.core.settings import get_settings
 
 
 @asynccontextmanager

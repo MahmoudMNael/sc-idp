@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.deps import db_dep, s_dep
-from src.keys import public_jwks
-from src.settings import Settings
+from src.core.deps import db_dep, s_dep
+from src.core.keys import public_jwks
+from src.core.settings import Settings
 
 router = APIRouter()
 

@@ -6,12 +6,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.audit import audit
-from src.crypto import hash_token
-from src.deps import db_dep, s_dep
-from src.keys import rotate_keys
+from src.core.crypto import hash_token
+from src.core.deps import db_dep, s_dep
+from src.core.keys import rotate_keys
+from src.core.settings import Settings
 from src.models import IdpRole, OAuthClient, User
-from src.roles import (
+from src.services.audit import audit
+from src.services.roles import (
     assign_role_to_user,
     ensure_role_exists,
     get_email_preassigned_roles,
@@ -20,7 +21,6 @@ from src.roles import (
     remove_preassigned_role_from_email,
     remove_role_from_user,
 )
-from src.settings import Settings
 
 router = APIRouter(prefix="/admin")
 

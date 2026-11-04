@@ -6,14 +6,14 @@ from urllib.parse import unquote_plus
 from fastapi import APIRouter, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.audit import audit
-from src.crypto import hash_token
-from src.deps import db_dep, ip_of, s_dep
+from src.core.crypto import hash_token
+from src.core.deps import db_dep, ip_of, s_dep
+from src.core.oauth_errors import token_error
+from src.core.settings import Settings
 from src.models import OAuthClient
-from src.oauth_errors import token_error
-from src.ratelimit import allow
-from src.settings import Settings
-from src.tokens import TokenError, exchange_code, rotate_refresh
+from src.services.audit import audit
+from src.services.ratelimit import allow
+from src.services.tokens import TokenError, exchange_code, rotate_refresh
 
 router = APIRouter()
 

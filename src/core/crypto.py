@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-from src.settings import Settings
+from src.core.settings import Settings
 
 _dummy_hash: str | None = None
 

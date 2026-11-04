@@ -3,11 +3,11 @@ import uuid
 from fastapi import APIRouter, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.deps import db_dep, s_dep
+from src.core.deps import db_dep, s_dep
+from src.core.oauth_errors import token_error
+from src.core.settings import Settings
 from src.models import User
-from src.oauth_errors import token_error
-from src.settings import Settings
-from src.tokens import TokenError, verify_access_token
+from src.services.tokens import TokenError, verify_access_token
 
 router = APIRouter()
 
@@ -38,7 +38,7 @@ async def userinfo(
         body["email"] = user.email
         body["email_verified"] = user.email_verified
     if "idp_roles" in scopes_set or "roles" in scopes_set:
-        from src.roles import get_user_roles
+        from src.services.roles import get_user_roles
 
         body["idp_roles"] = await get_user_roles(session, user.id)
     return body

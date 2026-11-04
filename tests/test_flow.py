@@ -67,8 +67,8 @@ def main() -> None:
     from sqlalchemy.ext.asyncio import create_async_engine
 
     from src.models import Base
-    from src.settings import get_settings
-    from src.tokens import mint_idp_jwt
+    from src.core.settings import get_settings
+    from src.services.tokens import mint_idp_jwt
 
     get_settings.cache_clear()
     settings = get_settings()
@@ -695,7 +695,7 @@ def main() -> None:
 
         # 7. test require_idp_role route guard dependency
         from fastapi import Depends
-        from src.roles import require_idp_role
+        from src.services.roles import require_idp_role
 
         @app.get("/_test_admin_only")
         async def _test_admin_only(user: User = Depends(require_idp_role("admin"))):

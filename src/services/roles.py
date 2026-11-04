@@ -7,10 +7,10 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.deps import db_dep, s_dep
+from src.core.deps import db_dep, s_dep
 from src.models import EmailIdpRolePreassignment, IdpRole, User, UserIdpRole
-from src.sessions import load_session
-from src.settings import Settings, get_settings
+from src.services.sessions import load_session
+from src.core.settings import Settings, get_settings
 
 
 class RoleName:

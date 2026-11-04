@@ -9,8 +9,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.audit import audit
-from src.crypto import (
+from src.core.crypto import (
     csrf_ok,
     dummy_verify,
     generate_otp,
@@ -22,14 +21,15 @@ from src.crypto import (
     unsign,
     verify_password,
 )
-from src.deps import db_dep, ip_of, s_dep
+from src.core.deps import db_dep, ip_of, s_dep
+from src.core.settings import Settings
 from src.html import page
-from src.mail import send_mail
 from src.models import EmailToken, User
-from src.ratelimit import allow
-from src.roles import apply_preassigned_roles
-from src.sessions import clear_session_cookie, create_session, load_session, set_session_cookie
-from src.settings import Settings
+from src.services.audit import audit
+from src.services.mail import send_mail
+from src.services.ratelimit import allow
+from src.services.roles import apply_preassigned_roles
+from src.services.sessions import clear_session_cookie, create_session, load_session, set_session_cookie
 
 router = APIRouter()
 LOGIN_ERROR = "Invalid email or password"
