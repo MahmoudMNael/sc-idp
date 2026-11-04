@@ -198,14 +198,18 @@ def main() -> None:
         assert "evil.test" not in (evil.headers.get("location") or "")
 
         sent_emails = []
+        import src.services.mail as mail_mod
+        orig_send_mail = mail_mod.send_mail
+
+        def fake_send_mail(settings, to, subject, body, html=None, *args, **kwargs):
+            sent_emails.append({"to": to, "subject": subject, "body": body, "html": html})
+            orig_send_mail(settings, to, subject, body, html=html, *args, **kwargs)
+
+        mail_mod.send_mail = fake_send_mail
         import src.routers.accounts as accounts_mod
-        orig_send_mail = accounts_mod.send_mail
-
-        def fake_send_mail(settings, to, subject, body):
-            sent_emails.append({"to": to, "subject": subject, "body": body})
-            orig_send_mail(settings, to, subject, body)
-
         accounts_mod.send_mail = fake_send_mail
+        import src.routers.authorize as authorize_mod
+        authorize_mod.send_mail = fake_send_mail
 
         reg = c.get("/register")
         bad_reg = c.post(
@@ -241,8 +245,12 @@ def main() -> None:
 
         # extract OTP and test verification
         assert sent_emails, "No email sent"
-        otp_m = re.search(r"code is:\s*([0-9]{6})", sent_emails[-1]["body"])
-        assert otp_m, sent_emails[-1]["body"]
+        reg_mail = [m for m in sent_emails if m["subject"] == "Verify your email"][-1]
+        otp_m = re.search(r"code is:\s*([0-9]{6})", reg_mail["body"])
+        assert otp_m, reg_mail["body"]
+        assert reg_mail.get("html"), "HTML body missing in register OTP"
+        assert "/logo-light.png" in reg_mail["html"]
+        assert "Verify your email" in reg_mail["html"]
         otp = otp_m.group(1)
 
         # wrong OTP
@@ -262,6 +270,11 @@ def main() -> None:
             follow_redirects=False,
         )
         assert good_otp.status_code == 303
+        welcome_mails = [m for m in sent_emails if m["subject"] == "Welcome to Short Circuit — Account Created"]
+        assert welcome_mails, "Account created welcome email not sent"
+        assert welcome_mails[-1].get("html"), "HTML body missing in account created email"
+        assert "Welcome to Short Circuit" in welcome_mails[-1]["html"]
+        assert "/logo-light.png" in welcome_mails[-1]["html"]
         c.get("/logout", follow_redirects=False)
 
         def login_and_code(
@@ -539,8 +552,12 @@ def main() -> None:
         assert f.status_code == 303
         assert "/reset-password/verify" in f.headers["location"]
 
-        reset_m = re.search(r"code is:\s*([0-9]{6})", sent_emails[-1]["body"])
-        assert reset_m, sent_emails[-1]["body"]
+        reset_mail = [m for m in sent_emails if m["subject"] == "Reset your password"][-1]
+        reset_m = re.search(r"code is:\s*([0-9]{6})", reset_mail["body"])
+        assert reset_m, reset_mail["body"]
+        assert reset_mail.get("html"), "HTML body missing in password reset email"
+        assert "Reset your password" in reset_mail["html"]
+        assert "/logo-light.png" in reset_mail["html"]
         reset_otp = reset_m.group(1)
 
         reset_verify_page = c.get(f.headers["location"])
@@ -650,9 +667,9 @@ def main() -> None:
         assert otp2_m
         otp2 = otp2_m.group(1)
 
-        # test max attempts (5 invalid tries allowed, 6th triggers 429)
+        # test max attempts (settings.otp_max_attempts invalid tries allowed, next triggers 429)
         curr_page = resend_resp
-        for _ in range(5):
+        for _ in range(settings.otp_max_attempts):
             curr_page = c.post(
                 "/verify-email",
                 data={"email": email2, "code": "000000", "csrf_token": csrf_token(curr_page.text)},
@@ -660,7 +677,7 @@ def main() -> None:
             )
             assert curr_page.status_code == 400
 
-        # 6th attempt is rate-limited
+        # next attempt is rate-limited
         curr_page = c.post(
             "/verify-email",
             data={"email": email2, "code": "000000", "csrf_token": csrf_token(curr_page.text)},
@@ -1125,6 +1142,76 @@ def main() -> None:
         assert "given_name" not in no_prof_id_claims
         assert "family_name" not in no_prof_id_claims
         assert "name" not in no_prof_id_claims
+
+        # 11. Test logo endpoints
+        logo_light_resp = c.get("/logo-light.png")
+        assert logo_light_resp.status_code == 200
+        assert logo_light_resp.headers["content-type"] == "image/png"
+        assert len(logo_light_resp.content) > 1000
+
+        logo_dark_resp = c.get("/logo-dark.png")
+        assert logo_dark_resp.status_code == 200
+        assert logo_dark_resp.headers["content-type"] == "image/png"
+        assert len(logo_dark_resp.content) > 1000
+
+        # 12. Test third-party client consent triggers account_linked email
+        tp_resp = c.post(
+            "/admin/clients",
+            headers=admin,
+            json={
+                "name": "Partner Studio",
+                "redirect_uris": ["http://partner.test/callback"],
+                "allowed_scopes": ["openid", "email"],
+                "is_first_party": False,
+            },
+        )
+        assert tp_resp.status_code == 200
+        tp_client = tp_resp.json()
+
+        _, tp_challenge = pkce()
+        c.post(
+            "/login",
+            data={"email": vip_email, "password": password, "csrf_token": csrf_token(c.get("/login").text)},
+            follow_redirects=False,
+        )
+        auth_req = c.get(
+            "/authorize",
+            params={
+                "client_id": tp_client["client_id"],
+                "redirect_uri": "http://partner.test/callback",
+                "response_type": "code",
+                "scope": "openid email",
+                "code_challenge": tp_challenge,
+                "code_challenge_method": "S256",
+            },
+            follow_redirects=False,
+        )
+        assert auth_req.status_code == 200
+        assert "authorize access" in auth_req.text.lower()
+        consent_csrf = csrf_token(auth_req.text)
+        next_m = re.search(r'name="next" value="([^"]+)"', auth_req.text)
+        assert next_m, "next field not found in consent page"
+        next_val = next_m.group(1)
+
+        consent_post = c.post(
+            "/consent",
+            data={
+                "csrf_token": consent_csrf,
+                "decision": "allow",
+                "next": next_val,
+            },
+            follow_redirects=False,
+        )
+        assert consent_post.status_code == 302
+        assert "http://partner.test/callback" in consent_post.headers["location"]
+
+        linked_mails = [m for m in sent_emails if "Partner Studio" in m["subject"]]
+        assert linked_mails, "Application connected email not sent"
+        assert linked_mails[-1]["to"] == vip_email
+        assert linked_mails[-1].get("html"), "HTML body missing in account_linked email"
+        assert "Partner Studio" in linked_mails[-1]["html"]
+        assert "openid email" in linked_mails[-1]["html"]
+        assert "/logo-light.png" in linked_mails[-1]["html"]
 
     print("ok")
 

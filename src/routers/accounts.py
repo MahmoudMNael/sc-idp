@@ -26,7 +26,12 @@ from src.core.settings import Settings
 from src.html import page
 from src.models import EmailToken, OAuthClient, User
 from src.services.audit import audit
-from src.services.mail import send_mail
+from src.services.mail import (
+    send_account_created_mail,
+    send_mail,
+    send_otp_forgot_password_mail,
+    send_otp_register_mail,
+)
 from src.services.ratelimit import allow
 from src.services.roles import apply_preassigned_roles
 from src.services.sessions import clear_session_cookie, create_session, load_session, set_session_cookie
@@ -281,12 +286,7 @@ async def register(
             expires_at=datetime.now(UTC) + timedelta(seconds=settings.otp_ttl),
         )
     )
-    send_mail(
-        settings,
-        email_n,
-        "Verify your email",
-        f"Your verification code is: {code}\nThis code expires in 10 minutes.",
-    )
+    send_otp_register_mail(settings, email_n, code)
     await audit(session, "register", user_id=user.id, ip=ip_of(request))
     query = {"email": email_n}
     if next:
@@ -343,6 +343,7 @@ async def verify_email(
     user.email_verified = True
     row.consumed_at = now
     await apply_preassigned_roles(session, user.id, email_n)
+    send_account_created_mail(settings, email_n)
     await audit(session, "email_verified", user_id=user.id, ip=ip_of(request))
 
     # ponytail: automatically sign in verified user and redirect to after-login target
@@ -409,12 +410,7 @@ async def verify_email_resend(
                 expires_at=datetime.now(UTC) + timedelta(seconds=settings.otp_ttl),
             )
         )
-        send_mail(
-            settings,
-            email_n,
-            "Verify your email",
-            f"Your verification code is: {code}\nThis code expires in 10 minutes.",
-        )
+        send_otp_register_mail(settings, email_n, code)
         return await _otp_page(
             request,
             session,
@@ -636,12 +632,7 @@ async def forgot(
                     expires_at=datetime.now(UTC) + timedelta(seconds=settings.otp_ttl),
                 )
             )
-            send_mail(
-                settings,
-                email_n,
-                "Reset your password",
-                f"Your password reset code is: {code}\nThis code expires in 10 minutes.",
-            )
+            send_otp_forgot_password_mail(settings, email_n, code)
             await audit(session, "password_reset_requested", user_id=user.id, ip=ip_of(request))
     # ponytail: avoid email enumeration by redirecting to verify screen regardless
     query = {"email": email_n}
@@ -752,12 +743,7 @@ async def reset_resend(
                 expires_at=datetime.now(UTC) + timedelta(seconds=settings.otp_ttl),
             )
         )
-        send_mail(
-            settings,
-            email_n,
-            "Reset your password",
-            f"Your password reset code is: {code}\nThis code expires in 10 minutes.",
-        )
+        send_otp_forgot_password_mail(settings, email_n, code)
         return await _otp_page(
             request,
             session,

@@ -1,0 +1,38 @@
+{% extends "mail/base.html" %}
+{% block title %}Welcome to Short Circuit — Account Created{% endblock %}
+{% block content %}
+<h1 style="margin: 0 0 12px 0; font-size: 22px; font-weight: 600; color: #111111; letter-spacing: -0.01em;">
+  Welcome to Short Circuit
+</h1>
+<p style="margin: 0 0 16px 0; font-size: 15px; line-height: 1.6; color: #4B5563;">
+  Your Short Circuit account is active and verified. You can now use your credentials to sign in across all Short Circuit applications and developer tools.
+</p>
+
+<!-- Account Details Box -->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin: 24px 0; background-color: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 8px;">
+  <tr>
+    <td style="padding: 16px 20px; font-size: 13px; line-height: 1.6; color: #4B5563;">
+      <div style="margin-bottom: 6px;"><span style="color: #6B7280; font-weight: 500;">Email:</span> <strong style="color: #111111;">{{ to }}</strong></div>
+      <div><span style="color: #6B7280; font-weight: 500;">Status:</span> <span style="display: inline-block; padding: 2px 8px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; background-color: #ECFDF5; color: #065F46; border: 1px solid #A7F3D0; border-radius: 4px;">Verified</span></div>
+    </td>
+  </tr>
+</table>
+
+<!-- Button -->
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 28px 0 24px 0;">
+  <tr>
+    <td align="center" style="border-radius: 8px; background-color: #EB1B26;">
+      <a href="{{ base_url }}/account" target="_blank" style="display: inline-block; padding: 13px 28px; font-family: 'Poppins', -apple-system, sans-serif; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: #FFFFFF; text-decoration: none; border-radius: 8px;">
+        Manage Account
+      </a>
+    </td>
+  </tr>
+</table>
+
+<p style="margin: 24px 0 0 0; font-size: 13px; line-height: 1.6; color: #6B7280;">
+  To further protect your identity, we recommend enabling two-factor authentication (TOTP) from your account settings.
+</p>
+{% endblock %}
+{% block footer_note %}
+Your account was successfully registered and verified at {{ base_url }}.
+{% endblock %}

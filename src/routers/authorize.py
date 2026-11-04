@@ -9,6 +9,7 @@ from src.core.settings import Settings
 from src.html import page
 from src.models import OAuthClient, User
 from src.routers.accounts import load_next, sign_next
+from src.services.mail import send_account_linked_mail
 from src.services.sessions import load_session
 from src.services.tokens import issue_code
 
@@ -154,6 +155,8 @@ async def consent(
     if sess is None:
         return RedirectResponse(f"/login?next={next}", status_code=302)
     user = await session.get(User, sess.user_id)
+    if user:
+        send_account_linked_mail(settings, user.email, client.name, parsed.get("scope") or "")
     params = {
         "redirect_uri": redirect_uri,
         "scope": parsed.get("scope") or "",

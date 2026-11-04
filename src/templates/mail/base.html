@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Short Circuit{% endblock %}</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #F4F5F7;
+      font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      color: #111111;
+      -webkit-font-smoothing: antialiased;
+    }
+    table { border-collapse: separate; }
+    a { color: #EB1B26; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body style="margin: 0; padding: 0; background-color: #F4F5F7; font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #111111;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #F4F5F7; width: 100%; margin: 0; padding: 32px 16px;">
+    <tr>
+      <td align="center">
+        <!-- Main Card Container -->
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width: 560px; width: 100%; background-color: #FFFFFF; border-radius: 12px; border: 1px solid #E5E7EB; box-shadow: 0 2px 8px rgba(0,0,0,0.04); overflow: hidden;">
+          <!-- Header with Light Logo -->
+          <tr>
+            <td style="padding: 32px 36px 20px 36px; text-align: left; border-bottom: 1px solid #F3F4F6;">
+              <a href="{{ base_url }}" target="_blank" style="display: inline-block;">
+                <img src="{{ base_url }}/logo-light.png" alt="Short Circuit" height="28" style="height: 28px; width: auto; display: block; border: 0;" />
+              </a>
+            </td>
+          </tr>
+          <!-- Body Content -->
+          <tr>
+            <td style="padding: 32px 36px 36px 36px;">
+              {% block content %}{% endblock %}
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 24px 36px; background-color: #FAFAFA; border-top: 1px solid #F3F4F6; text-align: left;">
+              <p style="margin: 0 0 8px 0; font-size: 12px; line-height: 1.5; color: #6B7280;">
+                {% block footer_note %}This is an automated notification from Short Circuit Identity Provider.{% endblock %}
+              </p>
+              <p style="margin: 0; font-size: 11px; line-height: 1.5; color: #9CA3AF;">
+                &copy; Short Circuit. All rights reserved.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

@@ -41,9 +41,21 @@ app.include_router(mfa.router, tags=["account"])
 app.include_router(logout.router, tags=["oidc"])
 app.include_router(admin.router, tags=["admin"])
 
+from fastapi.responses import FileResponse
+
 ASSETS_DIR = Path(__file__).resolve().parents[1] / "assets"
 if ASSETS_DIR.exists():
     app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
+
+
+@app.get("/logo-light.png", include_in_schema=False)
+async def logo_light():
+    return FileResponse(ASSETS_DIR / "logo-light.png", media_type="image/png")
+
+
+@app.get("/logo-dark.png", include_in_schema=False)
+async def logo_dark():
+    return FileResponse(ASSETS_DIR / "logo-dark.png", media_type="image/png")
 
 
 @app.get("/healthz", tags=["ops"])
