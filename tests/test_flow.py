@@ -91,12 +91,47 @@ def main() -> None:
         h = c.get("/healthz")
         assert h.status_code == 200, h.text
 
-        disc = c.get("/.well-known/openid-configuration").json()
+        disc_resp = c.get("/.well-known/openid-configuration")
+        assert disc_resp.status_code == 200
+        assert disc_resp.headers["access-control-allow-origin"] == "*"
+        assert "public, max-age=" in disc_resp.headers["cache-control"]
+        disc = disc_resp.json()
+        assert disc["issuer"] == settings.public_base
+        assert disc["jwks_uri"] == f"{settings.public_base}/.well-known/jwks.json"
+        assert disc["authorization_endpoint"] == f"{settings.public_base}/authorize"
+        assert disc["token_endpoint"] == f"{settings.public_base}/token"
+        assert disc["userinfo_endpoint"] == f"{settings.public_base}/userinfo"
+        assert disc["end_session_endpoint"] == f"{settings.public_base}/logout"
         assert disc["response_types_supported"] == ["code"]
+        assert disc["response_modes_supported"] == ["query"]
         assert disc["code_challenge_methods_supported"] == ["S256"]
         assert disc["id_token_signing_alg_values_supported"] == ["RS256"]
         assert "idp_roles" in disc["scopes_supported"]
         assert "idp_roles" in disc["claims_supported"]
+        assert "at_hash" in disc["claims_supported"]
+
+        # RFC 8414 OAuth authorization server metadata alias
+        rfc8414_disc = c.get("/.well-known/oauth-authorization-server")
+        assert rfc8414_disc.status_code == 200
+        assert rfc8414_disc.json() == disc
+
+        # JWKS headers and alias check
+        jwks_resp = c.get("/.well-known/jwks.json")
+        assert jwks_resp.status_code == 200
+        assert jwks_resp.headers["access-control-allow-origin"] == "*"
+        assert "public, max-age=" in jwks_resp.headers["cache-control"]
+        jwks_data = jwks_resp.json()
+        assert "keys" in jwks_data and len(jwks_data["keys"]) >= 1
+        k0 = jwks_data["keys"][0]
+        assert k0["kty"] == "RSA"
+        assert k0["use"] == "sig"
+        assert k0["alg"] == "RS256"
+        assert "n" in k0 and "e" in k0 and "kid" in k0
+
+        # /.well-known/jwks alias returns same keys
+        jwks_alias = c.get("/.well-known/jwks")
+        assert jwks_alias.status_code == 200
+        assert jwks_alias.json() == jwks_data
 
         # 1. forbidden claims never mint
         key = RSAKey.generate_key(2048, private=True, parameters={"kid": "t", "alg": "RS256", "use": "sig"})
