@@ -19,7 +19,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT))
 
 try:
     from dotenv import load_dotenv
@@ -66,9 +66,9 @@ def main() -> None:
     from joserfc.jwk import KeySet, RSAKey
     from sqlalchemy.ext.asyncio import create_async_engine
 
-    from idp.models import Base
-    from idp.settings import get_settings
-    from idp.tokens import mint_idp_jwt
+    from src.models import Base
+    from src.settings import get_settings
+    from src.tokens import mint_idp_jwt
 
     get_settings.cache_clear()
     settings = get_settings()
@@ -82,7 +82,7 @@ def main() -> None:
 
     asyncio.run(reset_db())
 
-    from idp.main import app
+    from src.main import app
 
     email = f"user-{secrets.token_hex(4)}@example.test"
     password = "correct-horse-battery"
@@ -144,7 +144,7 @@ def main() -> None:
         assert "evil.test" not in (evil.headers.get("location") or "")
 
         sent_emails = []
-        import idp.routers.accounts as accounts_mod
+        import src.routers.accounts as accounts_mod
         orig_send_mail = accounts_mod.send_mail
 
         def fake_send_mail(settings, to, subject, body):
@@ -695,7 +695,7 @@ def main() -> None:
 
         # 7. test require_idp_role route guard dependency
         from fastapi import Depends
-        from idp.roles import require_idp_role
+        from src.roles import require_idp_role
 
         @app.get("/_test_admin_only")
         async def _test_admin_only(user: User = Depends(require_idp_role("admin"))):

@@ -1,8 +1,8 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from idp.crypto import hash_token
-from idp.models import OAuthClient
-from idp.settings import Settings
+from src.crypto import hash_token
+from src.models import OAuthClient
+from src.settings import Settings
 
 
 async def bootstrap_demo_clients(session: AsyncSession, settings: Settings) -> None:

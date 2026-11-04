@@ -7,10 +7,10 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from idp.deps import db_dep, s_dep
-from idp.models import EmailIdpRolePreassignment, IdpRole, User, UserIdpRole
-from idp.sessions import load_session
-from idp.settings import Settings
+from src.deps import db_dep, s_dep
+from src.models import EmailIdpRolePreassignment, IdpRole, User, UserIdpRole
+from src.sessions import load_session
+from src.settings import Settings, get_settings
 
 
 class RoleName:
@@ -84,12 +84,17 @@ async def remove_preassigned_role_from_email(session: AsyncSession, email: str, 
     return (res.rowcount or 0) > 0
 
 
-async def apply_preassigned_roles(session: AsyncSession, user_id: uuid.UUID, email: str) -> list[str]:
+async def apply_preassigned_roles(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    email: str,
+    settings: Settings | None = None,
+) -> list[str]:
     email_n = email.strip().lower()
     preassigned = set(await get_email_preassigned_roles(session, email_n))
-    # ponytail: hardcoded domain rule; upgrade to domain mapping table or config when more domains need dynamic roles.
-    if email_n.endswith("@shortcircuitcompany.com"):
-        preassigned.add(RoleName.SC_MEMBER)
+    cfg = settings or get_settings()
+    if cfg.company_domain and email_n.endswith(f"@{cfg.company_domain.lower()}"):
+        preassigned.add(cfg.company_role or RoleName.SC_MEMBER)
     assigned = []
     for role in sorted(preassigned):
         if await assign_role_to_user(session, user_id, role):

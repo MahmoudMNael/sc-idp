@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     rate_limit_token: int = 30
     otp_ttl: int = 600
     otp_max_attempts: int = 5
+    company_domain: str = "shortcircuitcompany.com"
+    company_role: str = "sc_member"
 
     mail_backend: str = "console"
     smtp_host: str = ""

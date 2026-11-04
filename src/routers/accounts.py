@@ -9,8 +9,8 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from idp.audit import audit
-from idp.crypto import (
+from src.audit import audit
+from src.crypto import (
     csrf_ok,
     dummy_verify,
     generate_otp,
@@ -22,14 +22,14 @@ from idp.crypto import (
     unsign,
     verify_password,
 )
-from idp.deps import db_dep, ip_of, s_dep
-from idp.html import page
-from idp.mail import send_mail
-from idp.models import EmailToken, User
-from idp.ratelimit import allow
-from idp.roles import apply_preassigned_roles
-from idp.sessions import clear_session_cookie, create_session, load_session, set_session_cookie
-from idp.settings import Settings
+from src.deps import db_dep, ip_of, s_dep
+from src.html import page
+from src.mail import send_mail
+from src.models import EmailToken, User
+from src.ratelimit import allow
+from src.roles import apply_preassigned_roles
+from src.sessions import clear_session_cookie, create_session, load_session, set_session_cookie
+from src.settings import Settings
 
 router = APIRouter()
 LOGIN_ERROR = "Invalid email or password"
@@ -53,6 +53,39 @@ def after_login_target(settings: Settings, nxt: str | None) -> str:
 
 def _csrf_fail(request, settings):
     return page(request, settings, "error.html", status=400, error="Invalid or expired form token.")
+
+
+def _otp_page(
+    request: Request,
+    settings: Settings,
+    *,
+    is_reset: bool,
+    email: str,
+    next: str = "",
+    status: int = 200,
+    error: str | None = None,
+    message: str | None = None,
+):
+    action = "/reset-password/verify" if is_reset else "/verify-email"
+    resend = "/reset-password/resend" if is_reset else "/verify-email/resend"
+    title = "Reset password" if is_reset else "Verify your email"
+    heading = "Enter reset code" if is_reset else "Verify your email"
+    desc = f"We sent a 6-digit code to {email}." if email else "Enter the 6-digit code."
+    return page(
+        request,
+        settings,
+        "verify_otp.html",
+        status=status,
+        title=title,
+        heading=heading,
+        description=desc,
+        action=action,
+        resend_action=resend,
+        email=email,
+        next=next,
+        error=error,
+        message=message,
+    )
 
 
 async def _rate(session, settings, kind: str, ip: str | None, limit: int) -> bool:
@@ -122,20 +155,7 @@ async def verify_email_form(
     next: str = "",
     settings: Settings = s_dep,
 ):
-    return page(
-        request,
-        settings,
-        "verify_otp.html",
-        title="Verify your email",
-        heading="Verify your email",
-        description=f"We sent a 6-digit code to {email}." if email else "Enter the verification code sent to your email.",
-        action="/verify-email",
-        resend_action="/verify-email/resend",
-        email=email,
-        next=next,
-        error=None,
-        message=None,
-    )
+    return _otp_page(request, settings, is_reset=False, email=email, next=next)
 
 
 @router.post("/verify-email")
@@ -154,38 +174,10 @@ async def verify_email(
     user = (await session.execute(select(User).where(User.email == email_n))).scalar_one_or_none()
     now = datetime.now(UTC)
     if user is None:
-        return page(
-            request,
-            settings,
-            "verify_otp.html",
-            status=400,
-            title="Verify your email",
-            heading="Verify your email",
-            description=f"We sent a 6-digit code to {email_n}." if email_n else "Enter the verification code sent to your email.",
-            action="/verify-email",
-            resend_action="/verify-email/resend",
-            email=email_n,
-            next=next,
-            error="Invalid or expired verification code.",
-            message=None,
-        )
+        return _otp_page(request, settings, is_reset=False, email=email_n, next=next, status=400, error="Invalid or expired verification code.")
 
     if not await allow(session, f"otp_attempt:{user.id}", settings.otp_max_attempts, settings.otp_ttl):
-        return page(
-            request,
-            settings,
-            "verify_otp.html",
-            status=429,
-            title="Verify your email",
-            heading="Verify your email",
-            description=f"We sent a 6-digit code to {email_n}.",
-            action="/verify-email",
-            resend_action="/verify-email/resend",
-            email=email_n,
-            next=next,
-            error="Too many failed attempts. Please request a new code.",
-            message=None,
-        )
+        return _otp_page(request, settings, is_reset=False, email=email_n, next=next, status=429, error="Too many failed attempts. Please request a new code.")
 
     expected_hash = hash_otp(settings.token_hash_pepper, user.id, "verify_email", code)
     row = (
@@ -199,21 +191,7 @@ async def verify_email(
     ).scalar_one_or_none()
 
     if row is None or row.consumed_at or row.expires_at < now:
-        return page(
-            request,
-            settings,
-            "verify_otp.html",
-            status=400,
-            title="Verify your email",
-            heading="Verify your email",
-            description=f"We sent a 6-digit code to {email_n}.",
-            action="/verify-email",
-            resend_action="/verify-email/resend",
-            email=email_n,
-            next=next,
-            error="Invalid or expired verification code.",
-            message=None,
-        )
+        return _otp_page(request, settings, is_reset=False, email=email_n, next=next, status=400, error="Invalid or expired verification code.")
 
     user.email_verified = True
     row.consumed_at = now
@@ -252,21 +230,7 @@ async def verify_email_resend(
     user = (await session.execute(select(User).where(User.email == email_n))).scalar_one_or_none()
     if user and not user.email_verified:
         if not await allow(session, f"otp_resend:{user.id}", 3, 600):
-            return page(
-                request,
-                settings,
-                "verify_otp.html",
-                status=429,
-                title="Verify your email",
-                heading="Verify your email",
-                description=f"We sent a 6-digit code to {email_n}.",
-                action="/verify-email",
-                resend_action="/verify-email/resend",
-                email=email_n,
-                next=next,
-                error="Too many resend attempts. Please wait a few minutes.",
-                message=None,
-            )
+            return _otp_page(request, settings, is_reset=False, email=email_n, next=next, status=429, error="Too many resend attempts. Please wait a few minutes.")
         code = generate_otp(6)
         session.add(
             EmailToken(
@@ -282,20 +246,7 @@ async def verify_email_resend(
             "Verify your email",
             f"Your verification code is: {code}\nThis code expires in 10 minutes.",
         )
-    return page(
-        request,
-        settings,
-        "verify_otp.html",
-        title="Verify your email",
-        heading="Verify your email",
-        description=f"We sent a 6-digit code to {email_n}.",
-        action="/verify-email",
-        resend_action="/verify-email/resend",
-        email=email_n,
-        next=next,
-        error=None,
-        message="A new verification code has been sent.",
-    )
+    return _otp_page(request, settings, is_reset=False, email=email_n, next=next, message="A new verification code has been sent.")
 
 
 @router.get("/login")
@@ -426,20 +377,7 @@ async def reset_verify_form(
     email: str = "",
     settings: Settings = s_dep,
 ):
-    return page(
-        request,
-        settings,
-        "verify_otp.html",
-        title="Reset password",
-        heading="Enter reset code",
-        description=f"We sent a 6-digit code to {email}." if email else "Enter the 6-digit password reset code.",
-        action="/reset-password/verify",
-        resend_action="/reset-password/resend",
-        email=email,
-        next="",
-        error=None,
-        message=None,
-    )
+    return _otp_page(request, settings, is_reset=True, email=email)
 
 
 @router.post("/reset-password/verify")
@@ -457,38 +395,10 @@ async def reset_verify(
     user = (await session.execute(select(User).where(User.email == email_n))).scalar_one_or_none()
     now = datetime.now(UTC)
     if user is None:
-        return page(
-            request,
-            settings,
-            "verify_otp.html",
-            status=400,
-            title="Reset password",
-            heading="Enter reset code",
-            description=f"We sent a 6-digit code to {email_n}." if email_n else "Enter the 6-digit password reset code.",
-            action="/reset-password/verify",
-            resend_action="/reset-password/resend",
-            email=email_n,
-            next="",
-            error="Invalid or expired reset code.",
-            message=None,
-        )
+        return _otp_page(request, settings, is_reset=True, email=email_n, status=400, error="Invalid or expired reset code.")
 
     if not await allow(session, f"pwd_otp_attempt:{user.id}", settings.otp_max_attempts, settings.otp_ttl):
-        return page(
-            request,
-            settings,
-            "verify_otp.html",
-            status=429,
-            title="Reset password",
-            heading="Enter reset code",
-            description=f"We sent a 6-digit code to {email_n}.",
-            action="/reset-password/verify",
-            resend_action="/reset-password/resend",
-            email=email_n,
-            next="",
-            error="Too many failed attempts. Please request a new code.",
-            message=None,
-        )
+        return _otp_page(request, settings, is_reset=True, email=email_n, status=429, error="Too many failed attempts. Please request a new code.")
 
     expected_hash = hash_otp(settings.token_hash_pepper, user.id, "reset_password", code)
     row = (
@@ -502,21 +412,7 @@ async def reset_verify(
     ).scalar_one_or_none()
 
     if row is None or row.consumed_at or row.expires_at < now:
-        return page(
-            request,
-            settings,
-            "verify_otp.html",
-            status=400,
-            title="Reset password",
-            heading="Enter reset code",
-            description=f"We sent a 6-digit code to {email_n}.",
-            action="/reset-password/verify",
-            resend_action="/reset-password/resend",
-            email=email_n,
-            next="",
-            error="Invalid or expired reset code.",
-            message=None,
-        )
+        return _otp_page(request, settings, is_reset=True, email=email_n, status=400, error="Invalid or expired reset code.")
 
     row.consumed_at = now
     # Signed ticket valid for 10 minutes to set new password in step 2
@@ -538,21 +434,7 @@ async def reset_resend(
     user = (await session.execute(select(User).where(User.email == email_n))).scalar_one_or_none()
     if user and user.is_active:
         if not await allow(session, f"pwd_otp_resend:{user.id}", 3, 600):
-            return page(
-                request,
-                settings,
-                "verify_otp.html",
-                status=429,
-                title="Reset password",
-                heading="Enter reset code",
-                description=f"We sent a 6-digit code to {email_n}.",
-                action="/reset-password/verify",
-                resend_action="/reset-password/resend",
-                email=email_n,
-                next="",
-                error="Too many resend attempts. Please wait a few minutes.",
-                message=None,
-            )
+            return _otp_page(request, settings, is_reset=True, email=email_n, status=429, error="Too many resend attempts. Please wait a few minutes.")
         code = generate_otp(6)
         session.add(
             EmailToken(
@@ -568,20 +450,7 @@ async def reset_resend(
             "Reset your password",
             f"Your password reset code is: {code}\nThis code expires in 10 minutes.",
         )
-    return page(
-        request,
-        settings,
-        "verify_otp.html",
-        title="Reset password",
-        heading="Enter reset code",
-        description=f"We sent a 6-digit code to {email_n}.",
-        action="/reset-password/verify",
-        resend_action="/reset-password/resend",
-        email=email_n,
-        next="",
-        error=None,
-        message="A new reset code has been sent.",
-    )
+    return _otp_page(request, settings, is_reset=True, email=email_n, message="A new reset code has been sent.")
 
 
 @router.get("/reset-password")

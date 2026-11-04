@@ -10,10 +10,10 @@ from joserfc.jwt import JWTClaimsRegistry
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from idp.crypto import at_hash, hash_token, pkce_ok, random_token
-from idp.keys import public_jwks, signing_key, verify_key_set
-from idp.models import AuthorizationCode, OAuthClient, RefreshToken, User
-from idp.settings import Settings
+from src.crypto import at_hash, hash_token, pkce_ok, random_token
+from src.keys import public_jwks, signing_key, verify_key_set
+from src.models import AuthorizationCode, OAuthClient, RefreshToken, User
+from src.settings import Settings
 
 ALLOWED_CLAIMS = frozenset(
     {
@@ -146,7 +146,7 @@ async def _mint_pair(
         id_claims["email"] = user.email
         id_claims["email_verified"] = user.email_verified
     if "idp_roles" in scopes_set or "roles" in scopes_set:
-        from idp.roles import get_user_roles
+        from src.roles import get_user_roles
 
         id_claims["idp_roles"] = await get_user_roles(session, user.id)
     id_token = mint_idp_jwt(id_claims, key)

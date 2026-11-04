@@ -7,7 +7,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from idp.models import Base
+from src.models import Base
 
 try:
     from dotenv import load_dotenv

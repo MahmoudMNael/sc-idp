@@ -35,7 +35,7 @@ alembic upgrade head
 From the repo root, with the venv active:
 
 ```bash
-uvicorn idp.main:app --reload --host 127.0.0.1 --port 8000
+uvicorn src.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 - UI: the origin you set as `IDP_ISSUER`

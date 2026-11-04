@@ -25,7 +25,7 @@ Mail: `MAIL_BACKEND=console` prints links to stdout. `smtp` uses stdlib `smtplib
 
 ## Run
 
-See the README. Install with `pip install -e .`, fill `.env`, `alembic upgrade head`, then `uvicorn idp.main:app`. Demos: `PRODUCT_NAME=a` / `b` with `uvicorn demo.product:app`.
+See the README. Install with `pip install -e .`, fill `.env`, `alembic upgrade head`, then `uvicorn src.main:app`. Demos: `PRODUCT_NAME=a` / `b` with `uvicorn demo.product:app`.
 
 ## Migrations
 

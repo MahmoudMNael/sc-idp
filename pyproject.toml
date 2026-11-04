@@ -27,7 +27,8 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
+include = ["src*"]
 
 [tool.setuptools.package-data]
-idp = ["templates/*.html"]
+src = ["templates/*.html"]
