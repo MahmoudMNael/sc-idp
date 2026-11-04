@@ -82,6 +82,21 @@ def main() -> None:
 
     asyncio.run(reset_db())
 
+    async def age_tokens(user_email: str, seconds: int = 40) -> None:
+        from datetime import UTC, datetime, timedelta
+        from sqlalchemy import select, update
+        from src.models import EmailToken, User
+        engine = create_async_engine(settings.sqlalchemy_url)
+        async with engine.begin() as conn:
+            await conn.execute(
+                update(EmailToken)
+                .where(EmailToken.user_id == (
+                    select(User.id).where(User.email == user_email).scalar_subquery()
+                ))
+                .values(created_at=datetime.now(UTC) - timedelta(seconds=seconds))
+            )
+        await engine.dispose()
+
     from src.main import app
 
     email = f"user-{secrets.token_hex(4)}@example.test"
@@ -529,10 +544,36 @@ def main() -> None:
         reset_otp = reset_m.group(1)
 
         reset_verify_page = c.get(f.headers["location"])
+        assert "disabled" in reset_verify_page.text
+        assert "Resend code in " in reset_verify_page.text
+
+        # early reset resend blocked by 30s cooldown
+        early_reset_resend = c.post(
+            "/reset-password/resend",
+            data={"email": email, "csrf_token": csrf_token(reset_verify_page.text)},
+            follow_redirects=False,
+        )
+        assert early_reset_resend.status_code == 429
+        assert "Please wait" in early_reset_resend.text
+
+        # age tokens to simulate cooldown expiring
+        asyncio.run(age_tokens(email, 40))
+
+        good_reset_resend = c.post(
+            "/reset-password/resend",
+            data={"email": email, "csrf_token": csrf_token(early_reset_resend.text)},
+            follow_redirects=False,
+        )
+        assert good_reset_resend.status_code == 200
+        assert "A new reset code has been sent." in good_reset_resend.text
+        reset_m = re.search(r"code is:\s*([0-9]{6})", sent_emails[-1]["body"])
+        assert reset_m
+        reset_otp = reset_m.group(1)
+
         # wrong reset OTP
         bad_reset_otp = c.post(
             "/reset-password/verify",
-            data={"email": email, "code": "000000", "csrf_token": csrf_token(reset_verify_page.text)},
+            data={"email": email, "code": "000000", "csrf_token": csrf_token(good_reset_resend.text)},
             follow_redirects=False,
         )
         assert bad_reset_otp.status_code == 400
@@ -582,11 +623,25 @@ def main() -> None:
         )
         assert r2.status_code == 303
         v2_page = c.get(r2.headers["location"])
+        assert "disabled" in v2_page.text
+        assert "Resend code in " in v2_page.text
 
-        # test resend
-        resend_resp = c.post(
+        # test resend cooldown enforcement (early attempt blocked)
+        early_resend = c.post(
             "/verify-email/resend",
             data={"email": email2, "csrf_token": csrf_token(v2_page.text)},
+            follow_redirects=False,
+        )
+        assert early_resend.status_code == 429
+        assert "Please wait" in early_resend.text
+
+        # age tokens to simulate cooldown expiring
+        asyncio.run(age_tokens(email2, 40))
+
+        # test resend after cooldown expires
+        resend_resp = c.post(
+            "/verify-email/resend",
+            data={"email": email2, "csrf_token": csrf_token(early_resend.text)},
             follow_redirects=False,
         )
         assert resend_resp.status_code == 200

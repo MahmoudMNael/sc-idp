@@ -38,6 +38,7 @@ sequenceDiagram
 ### Security & Rate Controls
 - **Rate limiting**: Registration is throttled to 5 requests per minute per IP.
 - **Verification attempts**: Verification attempts are throttled to 5 per 10-minute window per user (`otp_attempt:{user_id}`).
+- **Resend cooldown & countdown**: Enforces a 30-second cooldown (`OTP_RESEND_COOLDOWN`) between OTP requests. The frontend resend button displays a live ticking countdown (`Resend code in 30s` -> `Resend code`); early attempts return HTTP 429.
 - **Resend limit**: Resending OTP is limited to 3 attempts per 10 minutes (`otp_resend:{user_id}`).
 - **Auto-login**: Successfully verifying the code mints an active browser session immediately without requiring a second login.
 
@@ -74,6 +75,7 @@ sequenceDiagram
 
 ### Security Notes
 - **User enumeration protection**: Submitting `/forgot-password` unconditionally redirects to `/reset-password/verify`. An attacker cannot deduce user existence from the HTTP response.
+- **Resend cooldown & countdown**: Like email verification, resends on `/reset-password/resend` require waiting 30 seconds (`OTP_RESEND_COOLDOWN`) with live countdown feedback on the button and backend 429 throttling.
 - **Ticket signature**: The intermediate ticket between OTP verification and password entry is an `itsdangerous` timestamp-signed token scoped to `pwd_reset_ticket` with a strict 10-minute expiration.
 
 ---
