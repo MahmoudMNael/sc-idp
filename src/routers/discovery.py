@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from idp.deps import db_dep, s_dep
-from idp.keys import public_jwks
-from idp.settings import Settings
+from src.core.deps import db_dep, s_dep
+from src.core.keys import public_jwks
+from src.core.settings import Settings
 
 router = APIRouter()
 
@@ -24,8 +24,8 @@ async def discovery(settings: Settings = s_dep):
         "code_challenge_methods_supported": ["S256"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post"],
-        "scopes_supported": ["openid", "email"],
-        "claims_supported": ["sub", "email", "email_verified"],
+        "scopes_supported": ["openid", "email", "idp_roles"],
+        "claims_supported": ["sub", "email", "email_verified", "idp_roles"],
     }
 
 

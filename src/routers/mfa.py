@@ -4,14 +4,14 @@ from pyotp import TOTP, random_base32
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from idp.audit import audit
-from idp.crypto import csrf_ok, decrypt_secret, encrypt_secret, hash_token, random_token
-from idp.deps import db_dep, ip_of, s_dep
-from idp.html import page
-from idp.models import MfaRecoveryCode, User
-from idp.routers.accounts import after_login_target
-from idp.sessions import create_session, load_session, set_session_cookie
-from idp.settings import Settings
+from src.core.crypto import csrf_ok, decrypt_secret, encrypt_secret, hash_token, random_token
+from src.core.deps import db_dep, ip_of, s_dep
+from src.core.settings import Settings
+from src.html import page
+from src.models import MfaRecoveryCode, User
+from src.routers.accounts import after_login_target
+from src.services.audit import audit
+from src.services.sessions import create_session, load_session, set_session_cookie
 
 router = APIRouter()
 

@@ -19,7 +19,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT))
 
 try:
     from dotenv import load_dotenv
@@ -66,9 +66,9 @@ def main() -> None:
     from joserfc.jwk import KeySet, RSAKey
     from sqlalchemy.ext.asyncio import create_async_engine
 
-    from idp.models import Base
-    from idp.settings import get_settings
-    from idp.tokens import mint_idp_jwt
+    from src.models import Base
+    from src.core.settings import get_settings
+    from src.services.tokens import mint_idp_jwt
 
     get_settings.cache_clear()
     settings = get_settings()
@@ -82,7 +82,7 @@ def main() -> None:
 
     asyncio.run(reset_db())
 
-    from idp.main import app
+    from src.main import app
 
     email = f"user-{secrets.token_hex(4)}@example.test"
     password = "correct-horse-battery"
@@ -95,6 +95,8 @@ def main() -> None:
         assert disc["response_types_supported"] == ["code"]
         assert disc["code_challenge_methods_supported"] == ["S256"]
         assert disc["id_token_signing_alg_values_supported"] == ["RS256"]
+        assert "idp_roles" in disc["scopes_supported"]
+        assert "idp_roles" in disc["claims_supported"]
 
         # 1. forbidden claims never mint
         key = RSAKey.generate_key(2048, private=True, parameters={"kid": "t", "alg": "RS256", "use": "sig"})
@@ -142,7 +144,7 @@ def main() -> None:
         assert "evil.test" not in (evil.headers.get("location") or "")
 
         sent_emails = []
-        import idp.routers.accounts as accounts_mod
+        import src.routers.accounts as accounts_mod
         orig_send_mail = accounts_mod.send_mail
 
         def fake_send_mail(settings, to, subject, body):
@@ -194,13 +196,20 @@ def main() -> None:
         assert good_otp.status_code == 303
         c.get("/logout", follow_redirects=False)
 
-        def login_and_code(client_id: str, redirect: str, prompt: str | None = None) -> tuple[str, str]:
+        def login_and_code(
+            client_id: str,
+            redirect: str,
+            prompt: str | None = None,
+            login_email: str | None = None,
+            login_password: str | None = None,
+            scope: str = "openid email",
+        ) -> tuple[str, str]:
             verifier, challenge = pkce()
             params = {
                 "client_id": client_id,
                 "redirect_uri": redirect,
                 "response_type": "code",
-                "scope": "openid email",
+                "scope": scope,
                 "code_challenge": challenge,
                 "code_challenge_method": "S256",
                 "state": "st",
@@ -216,8 +225,8 @@ def main() -> None:
                 posted = c.post(
                     "/login",
                     data={
-                        "email": email,
-                        "password": password,
+                        "email": login_email or email,
+                        "password": login_password or password,
                         "csrf_token": csrf_token(login_page.text),
                         "next": nxt,
                     },
@@ -554,6 +563,196 @@ def main() -> None:
         )
         assert replay_resp.status_code == 400
         assert "Invalid or expired" in replay_resp.text
+
+        # -------------------------------------------------------------
+        # IdP Roles Foundation Tests
+        # -------------------------------------------------------------
+        # 1. create role
+        r_create = c.post(
+            "/admin/roles",
+            headers=admin,
+            json={"name": "admin", "description": "IdP Administrator"},
+        )
+        assert r_create.status_code == 200, r_create.text
+        assert r_create.json()["name"] == "admin"
+
+        # duplicate role returns 409
+        dup_role = c.post(
+            "/admin/roles",
+            headers=admin,
+            json={"name": "admin"},
+        )
+        assert dup_role.status_code == 409
+
+        # list roles
+        roles_list = c.get("/admin/roles", headers=admin).json()
+        assert any(r["name"] == "admin" for r in roles_list)
+
+        # 2. preassign role to unregistered email
+        vip_email = f"vip-{secrets.token_hex(4)}@example.test"
+        pre_resp = c.post(
+            "/admin/roles/assign",
+            headers=admin,
+            json={"email": vip_email, "role": "admin"},
+        )
+        assert pre_resp.status_code == 200
+        assert pre_resp.json()["preassigned"] is True
+
+        assigns = c.get(f"/admin/roles/assignments?email={vip_email}", headers=admin).json()
+        assert assigns["user_id"] is None
+        assert assigns["user_roles"] == []
+        assert assigns["preassigned_roles"] == ["admin"]
+
+        # 3. register that email and verify OTP -> roles automatically assigned!
+        vip_reg = c.get("/register")
+        vip_r = c.post(
+            "/register",
+            data={"email": vip_email, "password": password, "csrf_token": csrf_token(vip_reg.text)},
+            follow_redirects=False,
+        )
+        assert vip_r.status_code == 303
+        vip_otp = re.search(r"code is:\s*([0-9]{6})", sent_emails[-1]["body"]).group(1)
+        vip_vpage = c.get(vip_r.headers["location"])
+        vip_verify = c.post(
+            "/verify-email",
+            data={"email": vip_email, "code": vip_otp, "csrf_token": csrf_token(vip_vpage.text)},
+            follow_redirects=False,
+        )
+        assert vip_verify.status_code == 303
+
+        # check user now has the role
+        vip_assigns = c.get(f"/admin/roles/assignments?email={vip_email}", headers=admin).json()
+        assert vip_assigns["user_id"] is not None
+        assert "admin" in vip_assigns["user_roles"]
+
+        # 4. assign second role directly
+        c.post(
+            "/admin/roles",
+            headers=admin,
+            json={"name": "auditor", "description": "Auditor"},
+        )
+        c.post(
+            "/admin/roles/assign",
+            headers=admin,
+            json={"email": vip_email, "role": "auditor"},
+        )
+        vip_assigns2 = c.get(f"/admin/roles/assignments?email={vip_email}", headers=admin).json()
+        assert set(vip_assigns2["user_roles"]) == {"admin", "auditor"}
+
+        # 5. unassign auditor
+        c.post(
+            "/admin/roles/unassign",
+            headers=admin,
+            json={"email": vip_email, "role": "auditor"},
+        )
+        vip_assigns3 = c.get(f"/admin/roles/assignments?email={vip_email}", headers=admin).json()
+        assert vip_assigns3["user_roles"] == ["admin"]
+
+        # 6. OIDC client requesting idp_roles scope
+        client_roles_resp = c.post(
+            "/admin/clients",
+            headers=admin,
+            json={
+                "name": "RolesApp",
+                "redirect_uris": ["http://rolesapp.test/callback"],
+                "allowed_scopes": ["openid", "email", "idp_roles"],
+                "is_first_party": True,
+            },
+        )
+        assert client_roles_resp.status_code == 200
+        client_roles = client_roles_resp.json()
+
+        # perform code flow with client_roles and vip user
+        code_r, verifier_r = login_and_code(
+            client_roles["client_id"],
+            "http://rolesapp.test/callback",
+            login_email=vip_email,
+            login_password=password,
+            scope="openid email idp_roles",
+        )
+        tok_r = c.post(
+            "/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": code_r,
+                "redirect_uri": "http://rolesapp.test/callback",
+                "code_verifier": verifier_r,
+            },
+            headers=basic(client_roles["client_id"], client_roles["client_secret"]),
+        )
+        assert tok_r.status_code == 200
+        jwks_data = c.get("/.well-known/jwks.json").json()
+        ks = KeySet.import_key_set(jwks_data)
+        verified_id = jwt.decode(tok_r.json()["id_token"], ks).claims
+        assert verified_id.get("idp_roles") == ["admin"]
+
+        # userinfo includes idp_roles
+        u_info = c.get(
+            "/userinfo",
+            headers={"Authorization": f"Bearer {tok_r.json()['access_token']}"},
+        ).json()
+        assert u_info.get("idp_roles") == ["admin"]
+
+        # 7. test require_idp_role route guard dependency
+        from fastapi import Depends
+        from src.services.roles import require_idp_role
+
+        @app.get("/_test_admin_only")
+        async def _test_admin_only(user: User = Depends(require_idp_role("admin"))):
+            return {"user": user.email}
+
+        # login as vip (has admin role)
+        c.get("/logout", follow_redirects=False)
+        loc_vip = c.get("/login")
+        c.post(
+            "/login",
+            data={
+                "email": vip_email,
+                "password": password,
+                "csrf_token": csrf_token(loc_vip.text),
+            },
+            follow_redirects=False,
+        )
+        ok_route = c.get("/_test_admin_only")
+        assert ok_route.status_code == 200
+        assert ok_route.json()["user"] == vip_email
+
+        # login as standard user (no admin role)
+        c.get("/logout", follow_redirects=False)
+        loc_user = c.get("/login")
+        c.post(
+            "/login",
+            data={
+                "email": email,
+                "password": new_password,
+                "csrf_token": csrf_token(loc_user.text),
+            },
+            follow_redirects=False,
+        )
+        forbidden_route = c.get("/_test_admin_only")
+        assert forbidden_route.status_code == 403
+        assert "insufficient idp roles" in forbidden_route.text
+
+        # 8. test @shortcircuitcompany.com automatic sc_member assignment
+        sc_email = f"alice-{secrets.token_hex(4)}@shortcircuitcompany.com"
+        sc_reg = c.get("/register")
+        sc_r = c.post(
+            "/register",
+            data={"email": sc_email, "password": password, "csrf_token": csrf_token(sc_reg.text)},
+            follow_redirects=False,
+        )
+        assert sc_r.status_code == 303
+        sc_otp = re.search(r"code is:\s*([0-9]{6})", sent_emails[-1]["body"]).group(1)
+        sc_vpage = c.get(sc_r.headers["location"])
+        sc_verify = c.post(
+            "/verify-email",
+            data={"email": sc_email, "code": sc_otp, "csrf_token": csrf_token(sc_vpage.text)},
+            follow_redirects=False,
+        )
+        assert sc_verify.status_code == 303
+
+        sc_assigns = c.get(f"/admin/roles/assignments?email={sc_email}", headers=admin).json()
+        assert "sc_member" in sc_assigns["user_roles"]
 
     print("ok")
 

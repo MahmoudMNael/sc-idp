@@ -6,9 +6,9 @@ from joserfc.jwk import KeySet, RSAKey
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from idp.crypto import decrypt_secret, encrypt_secret
-from idp.models import SigningKey
-from idp.settings import Settings
+from src.core.crypto import decrypt_secret, encrypt_secret
+from src.models import SigningKey
+from src.core.settings import Settings
 
 # ponytail: in-process TTL cache. Multi-instance rotation can lag up to KEY_CACHE_SECONDS. Upgrade: NOTIFY/LISTEN or shared cache.
 _priv: RSAKey | None = None

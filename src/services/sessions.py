@@ -5,9 +5,9 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from idp.crypto import hash_token, random_token
-from idp.models import AuthSession, User
-from idp.settings import Settings
+from src.core.crypto import hash_token, random_token
+from src.models import AuthSession, User
+from src.core.settings import Settings
 
 SESSION_SALT_MAX_AGE = 60 * 60 * 24 * 14
 

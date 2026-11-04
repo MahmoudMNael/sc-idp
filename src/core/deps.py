@@ -1,8 +1,8 @@
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from idp.db import get_db
-from idp.settings import Settings, get_settings
+from src.core.db import get_db
+from src.core.settings import Settings, get_settings
 
 
 def settings_dep() -> Settings:

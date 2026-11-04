@@ -3,11 +3,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sqlalchemy import text
 
-from idp import db
-from idp.bootstrap import bootstrap_demo_clients
-from idp.keys import ensure_active_key
-from idp.routers import accounts, admin, authorize, discovery, logout, mfa, token, userinfo
-from idp.settings import get_settings
+from src.core import db
+from src.services.bootstrap import bootstrap_demo_clients
+from src.core.keys import ensure_active_key
+from src.routers import accounts, admin, authorize, discovery, logout, mfa, token, userinfo
+from src.core.settings import get_settings
 
 
 @asynccontextmanager

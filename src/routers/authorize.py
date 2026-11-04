@@ -2,15 +2,15 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from idp.crypto import csrf_ok
-from idp.deps import db_dep, s_dep
-from idp.html import page
-from idp.models import OAuthClient, User
-from idp.oauth_errors import oauth_redirect
-from idp.routers.accounts import load_next, sign_next
-from idp.sessions import load_session
-from idp.settings import Settings
-from idp.tokens import issue_code
+from src.core.crypto import csrf_ok
+from src.core.deps import db_dep, s_dep
+from src.core.oauth_errors import oauth_redirect
+from src.core.settings import Settings
+from src.html import page
+from src.models import OAuthClient, User
+from src.routers.accounts import load_next, sign_next
+from src.services.sessions import load_session
+from src.services.tokens import issue_code
 
 router = APIRouter()
 

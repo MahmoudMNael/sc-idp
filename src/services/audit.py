@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from idp.models import AuditEvent
+from src.models import AuditEvent
 
 
 async def audit(
