@@ -2,10 +2,21 @@
 
 Central OpenID Connect provider: **who the user is**. Products decide **what they can do**.
 
-- Implementation spec: [plan.md](plan.md)
-- Product teams: [docs/integrating-a-product.md](docs/integrating-a-product.md)
-- How the IdP is built (every subsystem, theory + this repo): [docs/idp-reference.md](docs/idp-reference.md)
-- [Architecture](docs/architecture.md) · [Security](docs/security.md) · [Operations](docs/operations.md)
+---
+
+## Documentation
+
+| Document | Purpose |
+| --- | --- |
+| [Product Integration](docs/integrating-a-product.md) | OIDC wire protocol, tokens, scopes, claims, and redirect contracts |
+| [IdP Technical Reference](docs/idp-reference.md) | Subsystem architecture, database schema, tokens, and theory |
+| [Authentication & User Flows](docs/flows.md) | 6-digit OTP verification, password reset, MFA step-up, cancellation, and silent SSO |
+| [Admin Guide & Dashboard](docs/admin-guide.md) | Web Admin Dashboard (`/admin/dashboard`), REST admin API, client secrets, and role assignments |
+| [Architecture](docs/architecture.md) | Token layer split, two-tier role architecture, and silent SSO mechanics |
+| [Security](docs/security.md) | Threat model, non-negotiables, token hashing, and rate limiting |
+| [Operations](docs/operations.md) | Environment configuration, migrations, key rotation, and runbooks |
+
+---
 
 ## Install
 
@@ -18,17 +29,23 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-That installs this package and every pinned dependency from `pyproject.toml` (FastAPI, uvicorn, SQLAlchemy, psycopg, Alembic, and the rest). Re-run `pip install -e .` after pulling changes that touch that file.
+Installs this package and every pinned dependency from `pyproject.toml` (FastAPI, uvicorn, SQLAlchemy, psycopg, Alembic, and cryptography dependencies).
 
-Copy `.env.example` to `.env` and fill **every** variable yourself. The example file has names only.
+Copy `.env.example` to `.env` and fill the variables:
 
-`DATABASE_URL` must point at your Postgres. `IDP_ISSUER` is the origin the browser uses to reach this IdP (scheme + host + port, no trailing slash). For local HTTP set `COOKIE_SECURE` so cookies work without TLS.
+```bash
+cp .env.example .env
+```
 
-Apply schema:
+`DATABASE_URL` must point at your Postgres. `IDP_ISSUER` is the origin the browser uses to reach this IdP (scheme + host + port, no trailing slash). For local HTTP development set `COOKIE_SECURE=false`.
+
+Apply database migrations:
 
 ```bash
 alembic upgrade head
 ```
+
+---
 
 ## Run the IdP
 
@@ -38,37 +55,22 @@ From the repo root, with the venv active:
 uvicorn src.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-- UI: the origin you set as `IDP_ISSUER`
-- Discovery: `GET {IDP_ISSUER}/.well-known/openid-configuration`
-- Health: `GET {IDP_ISSUER}/healthz`
+- **UI**: `{IDP_ISSUER}/`
+- **Admin Dashboard**: `{IDP_ISSUER}/admin/dashboard`
+- **OIDC Discovery**: `GET {IDP_ISSUER}/.well-known/openid-configuration`
+- **OAuth Server Metadata**: `GET {IDP_ISSUER}/.well-known/oauth-authorization-server`
+- **JWKS**: `GET {IDP_ISSUER}/.well-known/jwks.json`
+- **Health check**: `GET {IDP_ISSUER}/healthz`
 
-## Run the demos
-
-Two first-party products share `demo/product.py`. They read `PRODUCT_A_*` / `PRODUCT_B_*` from `.env`. Set those plus matching `PRODUCT_*_URL` origins, and keep the IdP process running.
-
-Terminal 2 — product A:
-
-```bash
-source .venv/bin/activate
-PRODUCT_NAME=a uvicorn demo.product:app --reload --host 127.0.0.1 --port 8001
-```
-
-Terminal 3 — product B:
-
-```bash
-source .venv/bin/activate
-PRODUCT_NAME=b uvicorn demo.product:app --reload --host 127.0.0.1 --port 8002
-```
-
-If `PRODUCT_A_CLIENT_ID` / secret / URL (and the B equivalents) are set, the IdP upserts those clients on boot. Open A, create an account, sign in. Open B. You should not see a second login prompt. Each product mints its own JWT pair.
+---
 
 ## Tests
 
-Postgres must be up and `DATABASE_URL` set (from your `.env` or the environment):
+Postgres must be up and `DATABASE_URL` set (from `.env` or the environment):
 
 ```bash
 source .venv/bin/activate
 python tests/test_flow.py
 ```
 
-This drops and recreates tables in that database. Do not point it at production.
+This end-to-end integration suite drops and recreates tables in that database. **Do not point it at production.**
