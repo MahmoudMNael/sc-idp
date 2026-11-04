@@ -129,6 +129,8 @@ async def register_form(
         request,
         settings,
         "register.html",
+        first_name="",
+        last_name="",
         email="",
         next=next,
         client_name=client_name,
@@ -142,6 +144,8 @@ async def register(
     request: Request,
     session: AsyncSession = db_dep,
     settings: Settings = s_dep,
+    first_name: str = Form(""),
+    last_name: str = Form(""),
     email: str = Form(""),
     password: str = Form(""),
     csrf_token: str = Form(""),
@@ -156,11 +160,30 @@ async def register(
             settings,
             "register.html",
             status=429,
+            first_name=first_name,
+            last_name=last_name,
             email=email,
             next=next,
             client_name=client_name,
             cancel_url=cancel_url,
             error="Too many attempts. Try later.",
+        )
+    first_name_clean = first_name.strip()
+    last_name_clean = last_name.strip()
+    if not first_name_clean or not last_name_clean:
+        client_name, cancel_url = await oauth_context(session, settings, next)
+        return page(
+            request,
+            settings,
+            "register.html",
+            status=400,
+            first_name=first_name,
+            last_name=last_name,
+            email=email,
+            next=next,
+            client_name=client_name,
+            cancel_url=cancel_url,
+            error="First name and last name are required.",
         )
     email_n = email.strip().lower()
     if "@" not in email_n or len(password) < 8:
@@ -170,6 +193,8 @@ async def register(
             settings,
             "register.html",
             status=400,
+            first_name=first_name,
+            last_name=last_name,
             email=email,
             next=next,
             client_name=client_name,
@@ -184,13 +209,21 @@ async def register(
             settings,
             "register.html",
             status=400,
+            first_name=first_name,
+            last_name=last_name,
             email=email,
             next=next,
             client_name=client_name,
             cancel_url=cancel_url,
             error="Could not create that account.",
         )
-    user = User(email=email_n, password_hash=hash_password(settings, password), email_verified=False)
+    user = User(
+        email=email_n,
+        password_hash=hash_password(settings, password),
+        first_name=first_name_clean,
+        last_name=last_name_clean,
+        email_verified=False,
+    )
     session.add(user)
     await session.flush()
     await apply_preassigned_roles(session, user.id, email_n)

@@ -95,6 +95,7 @@ async def mfa_submit(
     return response
 
 
+@router.get("/account")
 @router.get("/account/mfa")
 async def account_mfa(request: Request, session: AsyncSession = db_dep, settings: Settings = s_dep):
     sess, user = await _user_session(request, session, settings)
@@ -108,12 +109,35 @@ async def account_mfa(request: Request, session: AsyncSession = db_dep, settings
         request,
         settings,
         "account.html",
+        first_name=user.first_name or "",
+        last_name=user.last_name or "",
         email=user.email,
         email_verified=user.email_verified,
         totp_enabled=user.totp_enabled,
         pending_uri=pending_uri,
         recovery_codes=None,
     )
+
+
+@router.post("/account/profile")
+async def account_profile(
+    request: Request,
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+    first_name: str = Form(""),
+    last_name: str = Form(""),
+    csrf_token: str = Form(""),
+):
+    if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
+        return page(request, settings, "error.html", status=400, error="Invalid or expired form token.")
+    sess, user = await _user_session(request, session, settings)
+    if sess is None or user is None:
+        return RedirectResponse("/login", status_code=303)
+    user.first_name = first_name.strip() or None
+    user.last_name = last_name.strip() or None
+    await audit(session, "profile_updated", user_id=user.id, ip=ip_of(request))
+    return RedirectResponse("/account/mfa", status_code=303)
+
 
 
 @router.post("/account/mfa/setup")
