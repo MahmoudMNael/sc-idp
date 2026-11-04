@@ -1,47 +1,63 @@
-# Security
+# Security Architecture & Threat Model
 
-## Non-negotiables
+---
 
-- PKCE S256 on every code. Discovery does not list `plain`.
-- Exact `redirect_uri` / `post_logout_redirect_uri` match. Validate the client and URI before any redirect (open-redirect hole otherwise).
-- IdP refresh tokens hashed, rotated, family-revoked on reuse. Codes survive consumption so a replay can revoke the family they minted.
-- Passwords Argon2id. High-entropy tokens HMAC-SHA256(pepper). TOTP secret encrypted at rest.
-- Identity-only JWT allowlist: `iss sub aud exp iat jti auth_time nonce at_hash amr scope client_id typ email email_verified`. Anything else raises.
-- Browser holds product tokens only.
-- Same login error for unknown user and wrong password. Dummy Argon2 verify so timing does not leak existence. Locked accounts also get that error.
-- Session cookie `HttpOnly` + `SameSite=Lax` + `Secure` in production. New token on login and MFA (session fixation).
-- CSRF on every HTML form (signed double-submit).
-- Rate limits on login, register, token. Account lockout after repeated password failures.
-- First-party clients skip consent; everyone else sees it.
+## 1. Non-Negotiables
 
-## Why HMAC, not Argon2, for tokens
+- **Mandatory PKCE S256**: Enforced on every authorization code request. `plain` challenge method is rejected.
+- **Exact Redirect URI Matching**: Strict string equality check on `redirect_uri` and `post_logout_redirect_uri`. Authorization requests with unknown clients or unregistered URIs render an IdP error page immediately and **never** issue a 302 redirect.
+- **Token Claims Whitelist**: Tokens are minted through `mint_idp_jwt` enforcing an immutable allowlist:
+  ```text
+  iss sub aud exp iat jti auth_time nonce at_hash amr scope client_id typ email email_verified given_name family_name name idp_roles
+  ```
+  Any attempt to smuggle arbitrary claims raises a runtime exception.
+- **Argon2id for Passwords**: Salted, memory-hard hashing (`time_cost=3`, `memory_cost=65536`, `parallelism=1`). Unknown usernames and locked accounts trigger a dummy Argon2 computation to prevent timing attacks.
+- **HMAC-SHA256 for Tokens**: Authorization codes, refresh tokens, session tokens, client secrets, recovery codes, and 6-digit OTPs are hashed using HMAC-SHA256 with a server-side pepper (`TOKEN_HASH_PEPPER`).
+- **Cryptographic Encryption at Rest**: RSA private signing keys and TOTP secrets are Fernet-encrypted with an encryption key derived via HKDF from `KEY_ENCRYPTION_KEY`.
+- **Session Security**: `idp_session` cookie is marked `HttpOnly`, `SameSite=Lax`, and `Secure` (in production). Session fixation protection rotates the session token on password verification and MFA elevation.
+- **Rate Limiting & Lockout**: Network-level rate limiting on login, registration, token exchange, and OTP operations. User account lockout is triggered after `LOGIN_MAX_FAILURES` wrong password attempts.
+- **Admin Access Isolation**:
+  - Web Admin Dashboard: strictly requires an active browser session with the `admin` role in `user_idp_roles` and double-submit CSRF validation.
+  - Admin REST API: strictly requires `Authorization: Bearer <IDP_ADMIN_API_KEY>` validated with constant-time comparison.
 
-Argon2 is salted. `hash(token)` is different every call, so a lookup by hash is a full table scan plus a verify per row. Auth codes and refresh tokens are 256-bit random; a dictionary attack does not exist. HMAC with a server-held pepper is deterministic (indexable) and still useless to anyone who only stole the table.
+---
 
-Argon2 stays on **user passwords**, which are low entropy. `check_needs_rehash` upgrades cost parameters on successful login.
+## 2. Why HMAC, Not Argon2, for Tokens & OTPs
 
-Client secrets are also high-entropy randoms we generate; they are HMAC'd and looked up by `client_id`, then compared in constant time.
+Argon2 is intentionally slow and salted. Verifying an Argon2 hash requires a full table scan and an expensive cryptographic verification per candidate row, making it unusable for index lookups.
 
-## Threat notes
+High-entropy values (auth codes, refresh tokens, session cookies, client secrets) cannot be brute-forced via offline dictionary attacks. Hashing them with HMAC-SHA256 using a server-held pepper produces deterministic outputs that can be indexed cleanly with unique database constraints. A database leak without `TOKEN_HASH_PEPPER` provides no usable credentials to an attacker.
 
-| Issue | Handling |
+For 6-digit email OTPs, entropy is naturally low (1,000,000 possibilities). `sc-idp` binds the HMAC to the pepper, user ID, purpose, and code:
+```python
+hash_otp(pepper, user_id, purpose, code) = HMAC_SHA256(pepper, f"{user_id}:{purpose}:{code}")
+```
+Combined with a 10-minute expiration, 5-attempt rate limits per user (`otp_attempt:{user_id}`), and 3-resend limits (`otp_resend:{user_id}`), brute-force attacks against OTPs are mathematically neutralized.
+
+---
+
+## 3. Threat Assessment Matrix
+
+| Threat Vector | Countermeasure in sc-idp |
 | --- | --- |
-| Stolen authorization code | 60s, single use, PKCE binds it to the client that started the flow. Replay revokes issued refresh family. |
-| Stolen IdP refresh | One use. Second use burns the family. Concurrent use is serialized with `FOR UPDATE`. |
-| Stolen product refresh | Product's problem, same pattern. Other products untouched. |
-| Stolen IdP session cookie | Valid until idle/absolute expiry or logout. MFA step-up required if TOTP is on. Rotate on login. |
-| XSS on a product | Gets that product's JWT/refresh, not the IdP session (different host, HttpOnly). |
-| Mix-up / wrong `aud` | Access and ID tokens set `aud` to `client_id`. Products must verify. |
-| `role` smuggled onto IdP JWT | `mint_idp_jwt` refuses to encode. |
-| Open redirect via `/authorize` | Unknown client or URI never 302s. |
-| Login CSRF | Signed cookie must match signed field. |
-| Admin endpoint | Bearer API key, constant-time compare. Replace with staff SSO before production internet exposure. |
-| Key leak from DB | Private JWK is encrypted; need `KEY_ENCRYPTION_KEY` too. |
+| **Stolen authorization code** | Short 60s TTL, single-use consumption. PKCE S256 binds redemption to the caller possessing the secret verifier. Code replay revokes the issued refresh family. |
+| **Stolen IdP refresh token** | Token rotation on every use. Replay of an already-used token triggers immediate revocation of the entire refresh family (`refresh_reuse`). |
+| **Stolen product refresh token** | Isolated to that specific product. The product revokes its own local family; the IdP and other products remain unaffected. |
+| **Stolen browser session cookie** | Bound by idle (`SESSION_IDLE_TTL`) and absolute (`SESSION_ABSOLUTE_TTL`) timeouts. MFA step-up required if TOTP is enabled. Rotated on login and privilege change. |
+| **Cross-Site Scripting (XSS) on Product** | Attackers can steal product access tokens but cannot access the IdP session cookie due to browser host-scoping and `HttpOnly` flags. |
+| **Open redirect via `/authorize`** | Unregistered `redirect_uri` never triggers a redirect; renders an IdP error page. |
+| **Timing attack on login** | Constant-time dummy Argon2 hash computation runs on unknown emails and locked accounts. Generic `Invalid email or password` message used universally. |
+| **CSRF on HTML forms** | Double-submit signed cookie (`itsdangerous`) validated against form field on all POST requests. |
+| **Admin Dashboard privilege escalation** | Explicit database check against `user_idp_roles` for `RoleName.ADMIN` on every dashboard route. Unauthorized requests yield HTTP 403 Forbidden. |
+| **Database compromise** | Private RSA signing keys and TOTP secrets are encrypted at rest using Fernet keys derived from `KEY_ENCRYPTION_KEY`. Stolen database dumps cannot decrypt private keys without the environment secret. |
 
-## Rate limit ceiling
+---
 
-Postgres fixed-window counters. Fine for a single primary. Under many IdP instances the extra row lock is the ceiling. Upgrade: Redis `INCR` + TTL.
+## 4. Rate Limiting Limits & Boundaries
 
-## What we do not claim
-
-Logout is not a distributed revoke. Short access-token TTLs are the practical bound. A product that needs instant kill must keep a server-side session version or denylist for **its** tokens.
+Postgres-backed fixed-window counters (`rate_limits` table) handle throttling:
+- `login:<ip>`: default 10 requests per minute.
+- `register:<ip>`: default 5 requests per minute.
+- `token:<ip>`: default 30 requests per minute.
+- `otp_attempt:<user_id>`: 5 attempts per 10-minute window.
+- `otp_resend:<user_id>`: 3 resends per 10-minute window.

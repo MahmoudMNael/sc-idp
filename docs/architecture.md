@@ -1,77 +1,106 @@
-# Architecture
+# System Architecture
 
 One IdP, many products, two token layers.
 
 ```mermaid
 flowchart LR
-  IdP["IdP JWT plus refresh: who"]
-  Product["Product JWT plus refresh: logged into this app"]
-  IdP -->|"sub via OIDC on backend"| Product
+  IdP["IdP JWT plus refresh: Identity + Org Tier"]
+  Product["Product JWT plus refresh: Logged into this app"]
+  IdP -->|"OIDC code flow via backend"| Product
 ```
 
-The IdP host (for example `auth.company.com`) holds the only login cookie. That cookie is an IdP **session**, used only to decide whether `/authorize` can issue a code without a prompt. It is not a credential for product APIs.
+The IdP host (e.g. `auth.company.com`) holds the primary login cookie. That cookie is an IdP **session**, used solely to determine whether `/authorize` can issue an authorization code without prompting the human. It is not an authorization credential for product APIs.
 
-Products (`appa.com`, `appb.com`) are confidential OAuth clients. After `/token`, they read `sub` and mint product-local tokens.
+Products (`appa.com`, `appb.com`) are confidential OAuth clients. After exchanging an authorization code at `/token`, they verify identity claims, read `sub`, and mint product-local tokens.
 
-## Why the split
+---
 
-- The IdP never becomes the bottleneck for “can they do this here?”
-- Each product’s role model can evolve independently.
-- IdP tokens stay small (identity claims only).
-- The browser implements one refresh protocol: the product’s. It does not speak OIDC refresh.
-- Same SSO pattern Google / Microsoft / Atlassian / Slack use across domains.
+## 1. Why the Split
 
-OPA, entitlements, and billing stay inside the product that owns the resource. Never on the IdP token.
+- **No central authorization bottleneck**: Products validate authorization decisions locally; the IdP never sits on the hot path of application API authorization.
+- **Independent role evolution**: Each product designs its own permission matrix, tenant boundaries, and policy engines without touching the IdP schema.
+- **Clean identity boundary**: IdP tokens carry identity (`sub`, `email`, `profile`, `idp_roles`). Entitlements and billing stay inside the respective applications.
+- **Isolated refresh protocols**: Frontend clients speak only their product backend's refresh protocol; they never handle IdP refresh tokens.
+- **Battle-tested SSO**: Follows the federated architecture proven by Google, Microsoft, and Atlassian across multiple web domains.
 
-## Silent SSO
+---
 
-Cookies are host-scoped. Product A and product B never see the IdP cookie. They redirect the browser to the IdP. If the session exists, the user returns with a code and never sees a login form. Each product then issues **its own** JWTs (different issuer and keys).
+## 2. Two-Tier Role Architecture
+
+```mermaid
+flowchart TD
+  subgraph IdP Layer
+    IdPRoles["IdP Roles: idp_roles claim ('admin', 'sc_member')"]
+  end
+
+  subgraph Product Layer
+    ProdAuth["Product Backend"]
+    Roles["Product-Specific Permissions ('editor', 'billing_lead')"]
+    Resources["Protected App APIs"]
+  end
+
+  IdPRoles -->|"Asserted via OIDC ID Token / UserInfo"| ProdAuth
+  ProdAuth --> Roles
+  Roles --> Resources
+```
+
+1. **IdP Roles (`idp_roles`)**: Assert platform-wide identity claims, such as staff status (`sc_member`) or central administration privileges (`admin`).
+2. **Product Permissions**: Domain-specific roles (e.g., repository permissions, project roles, subscription plans) are managed and evaluated exclusively within each product backend.
+
+---
+
+## 3. Silent SSO Across Products
+
+Because cookies are host-scoped, Product A and Product B cannot read the IdP session cookie. When a user navigates between products, SSO is achieved via top-level browser redirects.
 
 ```mermaid
 sequenceDiagram
-  participant User
-  participant AppB
-  participant IdP
-  User->>AppB: Hit appb.com, no product JWT
-  AppB->>IdP: Redirect to /authorize
-  alt IdP session cookie exists
-    IdP->>AppB: Redirect with authorization code
-  else No session
-    IdP->>User: Login form once
-    User->>IdP: Credentials
-    IdP->>AppB: Redirect with authorization code
+  autonumber
+  participant User as Browser
+  participant AppB as Product B Backend
+  participant IdP as sc-idp
+
+  User->>AppB: Access appb.com (no product session)
+  AppB->>IdP: 302 Redirect to /authorize
+  alt IdP session exists
+    IdP-->>AppB: 302 Redirect to appb.com/callback with authorization code (no prompt)
+  else No IdP session
+    IdP-->>User: Render login form
+    User->>IdP: Submit credentials & OTP
+    IdP-->>AppB: 302 Redirect to appb.com/callback with authorization code
   end
-  AppB->>IdP: POST /token
-  IdP->>AppB: IdP access, ID, refresh
-  AppB->>AppB: Read sub, mint product JWT plus refresh
-  AppB->>User: Return product access JWT and product refresh
+  AppB->>IdP: POST /token (code exchange)
+  IdP-->>AppB: IdP tokens (access, id_token, refresh)
+  AppB->>AppB: Read sub, mint product B access JWT & refresh
+  AppB-->>User: Set Product B session and complete navigation
 ```
 
-## Independent clocks
+---
 
-| Event | What happens |
+## 4. Independent Token Clocks
+
+| Event | System Behavior |
 | --- | --- |
-| Product access JWT expired, product refresh valid | Product `/refresh`. IdP not involved. |
-| Product refresh dead | Restart `/authorize`. Silent if IdP session still valid. |
-| IdP access JWT expired, product JWT still valid | User keeps using the product. Backend refreshes IdP only if it still needs IdP tokens. |
-| IdP refresh dead, product JWT still valid | This product keeps working until **its** refresh dies. |
-| Stolen product refresh reused | That product revokes its own family. Other products untouched. |
-| Stolen IdP refresh reused | That client's IdP family is revoked. Product JWTs already minted keep working until they expire. |
+| **Product access JWT expired, product refresh valid** | Frontend calls Product `/refresh`. IdP is completely bypassed. |
+| **Product refresh token expired or revoked** | Product redirects browser to IdP `/authorize`. If the IdP session is valid, SSO is instant and silent. |
+| **IdP access JWT expired, product JWT valid** | Product continues operating normally. Backend refreshes IdP token only if it needs fresh UserInfo claims. |
+| **IdP refresh dead, product JWT valid** | Product continues operating normally until **its own** refresh expires. |
+| **Compromised product refresh token reused** | That product revokes its own refresh family. All other products remain unaffected. |
+| **Compromised IdP refresh token reused** | IdP revokes that client's refresh family. Previously issued product JWTs continue until normal expiration. |
 
-## Request path inside this repo
+---
 
-`GET /authorize` validates `client_id` and `redirect_uri` **before** it is willing to 302 anywhere. Failures before that render HTML on the IdP. After that, OAuth errors go to the (now trusted) redirect URI.
+## 5. Administrative Surface Architecture
 
-If a login is needed, `/authorize` 302s to `/login?next=<signed original query>`. On success, `/login` 303s back to `/authorize?...` which re-validates everything from scratch. There is no “pending auth request” table.
+`sc-idp` separates administrative concerns into two operational channels:
 
-`POST /token` authenticates the client (Basic or post), then either consumes a code (`SELECT FOR UPDATE`, PKCE, exact redirect) or rotates a refresh (reuse ⇒ revoke family).
+```mermaid
+flowchart LR
+  Human["Admin User (Browser)"] -->|"/admin/dashboard (Session + 'admin' role)"| Dashboard["Web Admin Dashboard"]
+  CI["CI/CD & DevOps Scripts"] -->|"/admin/* (Bearer API Key)"| REST["Admin REST API"]
+  Dashboard --> Core["Client & Key Services"]
+  REST --> Core
+```
 
-One function mints every IdP JWT and refuses unknown claims.
-
-## Signing keys
-
-RSA-2048, RS256. Private JWK is encrypted at rest with a key derived from `KEY_ENCRYPTION_KEY`. `/admin/keys/rotate` marks the current key `retiring` until `KEY_RETIRE_SECONDS` and inserts a new `active` key. JWKS continues to serve retiring keys so in-flight tokens verify. In-process cache TTL is `KEY_CACHE_SECONDS` (multi-instance lag is that long).
-
-## Demo products
-
-`demo/product.py` is the reference relying party, run twice (`PRODUCT_NAME=a|b`) to prove silent SSO. In-memory product refresh store — not a blueprint for production product DBs.
+- **Web Admin Dashboard (`/admin/dashboard`)**: Session-authenticated interface for managing OAuth clients, secret rotation, and status toggles. Access requires the `admin` role in `user_idp_roles`.
+- **Admin REST API**: Headless endpoints for automated deployment pipelines authenticated via `Authorization: Bearer <IDP_ADMIN_API_KEY>`.
