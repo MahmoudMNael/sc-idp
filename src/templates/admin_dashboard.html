@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+{% block title %}OAuth Clients — Admin Dashboard | Short Circuit IdP{% endblock %}
+
+{% block nav %}
+  <span class="badge badge-accent">IDP ADMIN</span>
+  <span class="muted" style="font-size: 0.825rem;">{{ current_user.email }}</span>
+  <a href="/admin/dashboard" class="active">OAuth Clients</a>
+  <a href="/account">Account</a>
+  <a href="/logout">Sign out</a>
+{% endblock %}
+
+{% block main_class %}container-xl{% endblock %}
+
+{% block body %}
+<div style="margin-bottom: 2rem;">
+  <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em; color: var(--accent); text-transform: uppercase; margin-bottom: 0.4rem; font-weight: 600;">IDP ADMINISTRATION</div>
+  <h1>OAUTH CLIENTS</h1>
+  <p class="muted" style="margin-top: -0.5rem; margin-bottom: 1.5rem; max-width: 760px;">
+    Register and manage application clients connecting to Short Circuit Identity. Client credentials authorize service integrations and enforce strict redirect boundaries.
+  </p>
+</div>
+
+{% if new_secret %}
+<div class="sc-card" style="border-color: var(--accent); background: #160709;">
+  <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;">
+    <div style="display: flex; align-items: center; gap: 0.75rem;">
+      <span class="badge badge-accent">Credentials Generated</span>
+      <strong style="color: #FFFFFF; font-size: 1rem;">{{ new_client_name }}</strong>
+    </div>
+    <span style="font-size: 0.825rem; color: var(--warning); font-weight: 500;">
+      ⚠️ Store the client secret safely. It is hashed in storage and will never be shown again.
+    </span>
+  </div>
+  <div class="sc-grid-2">
+    <div>
+      <label style="margin-top: 0;">Client ID</label>
+      <div style="display: flex; gap: 0.5rem;">
+        <input id="revealed-cid" readonly value="{{ new_client_id }}" style="font-family: var(--font-mono); font-size: 0.85rem;">
+        <button type="button" class="btn sm secondary" onclick="navigator.clipboard.writeText(document.getElementById('revealed-cid').value); this.innerText='COPIED'; setTimeout(() => this.innerText='COPY', 2000);">COPY</button>
+      </div>
+    </div>
+    <div>
+      <label style="margin-top: 0;">Client Secret</label>
+      <div style="display: flex; gap: 0.5rem;">
+        <input id="revealed-secret" readonly value="{{ new_secret }}" style="font-family: var(--font-mono); font-size: 0.85rem; color: #4ade80;">
+        <button type="button" class="btn sm secondary" onclick="navigator.clipboard.writeText(document.getElementById('revealed-secret').value); this.innerText='COPIED'; setTimeout(() => this.innerText='COPY', 2000);">COPY</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if flash_message %}
+  <div class="ok">{{ flash_message }}</div>
+{% endif %}
+
+{% if flash_error %}
+  <div class="error">{{ flash_error }}</div>
+{% endif %}
+
+<!-- Metrics Overview -->
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.25rem; margin-bottom: 2rem;">
+  <div class="sc-card" style="padding: 1.25rem; margin-bottom: 0;">
+    <div style="font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.08em;">Total Clients</div>
+    <div style="font-family: var(--font-display); font-size: 2.25rem; color: var(--text); margin-top: 0.25rem;">{{ clients|length }}</div>
+  </div>
+  <div class="sc-card" style="padding: 1.25rem; margin-bottom: 0;">
+    <div style="font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.08em;">Active Clients</div>
+    <div style="font-family: var(--font-display); font-size: 2.25rem; color: var(--success); margin-top: 0.25rem;">
+      {{ clients|selectattr("is_active")|list|length }}
+    </div>
+  </div>
+  <div class="sc-card" style="padding: 1.25rem; margin-bottom: 0;">
+    <div style="font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.08em;">First-Party Clients</div>
+    <div style="font-family: var(--font-display); font-size: 2.25rem; color: var(--accent); margin-top: 0.25rem;">
+      {{ clients|selectattr("is_first_party")|list|length }}
+    </div>
+  </div>
+</div>
+
+<!-- Register Client Form Card -->
+<div class="sc-card">
+  <h2>REGISTER NEW CLIENT</h2>
+  <p class="muted" style="margin-top: -0.5rem; margin-bottom: 1.5rem;">
+    Create an OAuth 2.0 client. The system generates high-entropy random credentials on submission.
+  </p>
+  <form method="post" action="/admin/dashboard/clients">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    
+    <div class="sc-grid-2">
+      <div>
+        <label for="name">Client Semantic Name *</label>
+        <input id="name" name="name" required placeholder="e.g. Analytics Dashboard, Inventory Core" autocomplete="off">
+        <p class="muted" style="font-size: 0.775rem; margin-top: 0.35rem;">Human-readable product or service name.</p>
+      </div>
+      <div>
+        <label>Allowed Scopes</label>
+        <div style="display: flex; gap: 1.5rem; align-items: center; margin-top: 0.65rem;">
+          <label style="display: inline-flex; align-items: center; gap: 0.5rem; margin: 0; text-transform: none; font-size: 0.875rem; color: var(--text);">
+            <input type="checkbox" name="scopes" value="openid" checked disabled style="width: auto; margin: 0;">
+            <input type="hidden" name="scopes" value="openid">
+            <code>openid</code> (required)
+          </label>
+          <label style="display: inline-flex; align-items: center; gap: 0.5rem; margin: 0; text-transform: none; font-size: 0.875rem; color: var(--text);">
+            <input type="checkbox" name="scopes" value="email" checked style="width: auto; margin: 0;">
+            <code>email</code>
+          </label>
+          <label style="display: inline-flex; align-items: center; gap: 0.5rem; margin: 0; text-transform: none; font-size: 0.875rem; color: var(--text);">
+            <input type="checkbox" name="scopes" value="idp_roles" checked style="width: auto; margin: 0;">
+            <code>idp_roles</code>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="sc-grid-2" style="margin-top: 1rem;">
+      <div>
+        <label for="redirect_uris">Redirect URIs * (one per line)</label>
+        <textarea id="redirect_uris" name="redirect_uris" rows="3" required placeholder="https://app.shortcircuit.internal/callback&#10;http://localhost:3000/callback" style="font-family: var(--font-mono); font-size: 0.825rem;"></textarea>
+      </div>
+      <div>
+        <label for="post_logout_redirect_uris">Post-Logout Redirect URIs (optional, one per line)</label>
+        <textarea id="post_logout_redirect_uris" name="post_logout_redirect_uris" rows="3" placeholder="https://app.shortcircuit.internal/&#10;http://localhost:3000/" style="font-family: var(--font-mono); font-size: 0.825rem;"></textarea>
+      </div>
+    </div>
+
+    <div style="margin-top: 1.25rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+      <label style="display: inline-flex; align-items: center; gap: 0.6rem; margin: 0; text-transform: none; font-size: 0.875rem; color: var(--text); cursor: pointer;">
+        <input type="checkbox" name="is_first_party" value="true" checked style="width: auto; margin: 0;">
+        <span>First-party application (bypass user authorization consent prompt)</span>
+      </label>
+      <button type="submit">REGISTER CLIENT</button>
+    </div>
+  </form>
+</div>
+
+<!-- Registered Clients List Card -->
+<div class="sc-card">
+  <h2>REGISTERED CLIENTS</h2>
+  <p class="muted" style="margin-top: -0.5rem; margin-bottom: 1.5rem;">
+    Existing registered OAuth clients, their credentials, and operational statuses.
+  </p>
+
+  {% if clients %}
+  <div style="overflow-x: auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>Client Name</th>
+          <th>Client ID</th>
+          <th>Redirect URIs</th>
+          <th>Scopes</th>
+          <th>Type</th>
+          <th>Status</th>
+          <th style="text-align: right;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in clients %}
+        <tr>
+          <td>
+            <div style="font-weight: 600; color: var(--text);">{{ c.name }}</div>
+            <div class="muted" style="font-size: 0.75rem; font-family: var(--font-mono);">Created {{ c.created_at.strftime('%Y-%m-%d %H:%M') if c.created_at else 'Initial' }}</div>
+          </td>
+          <td>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <code style="font-size: 0.8rem;">{{ c.client_id }}</code>
+              <button type="button" class="btn sm secondary" style="padding: 0.2rem 0.45rem; font-size: 0.675rem;" onclick="navigator.clipboard.writeText('{{ c.client_id }}'); this.innerText='COPIED'; setTimeout(() => this.innerText='COPY', 1500);">COPY</button>
+            </div>
+          </td>
+          <td>
+            {% for r in c.redirect_uris %}
+              <div style="font-family: var(--font-mono); font-size: 0.775rem; color: var(--text-muted); word-break: break-all;">{{ r }}</div>
+            {% endfor %}
+          </td>
+          <td>
+            <div style="display: flex; flex-wrap: wrap; gap: 0.25rem;">
+              {% for s in c.allowed_scopes %}
+                <span class="badge badge-muted" style="font-size: 0.65rem;">{{ s }}</span>
+              {% endfor %}
+            </div>
+          </td>
+          <td>
+            {% if c.is_first_party %}
+              <span class="badge badge-accent">1st Party</span>
+            {% else %}
+              <span class="badge badge-muted">3rd Party</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if c.is_active %}
+              <span class="badge badge-success">ACTIVE</span>
+            {% else %}
+              <span class="badge badge-muted">INACTIVE</span>
+            {% endif %}
+          </td>
+          <td style="text-align: right; white-space: nowrap;">
+            <div style="display: inline-flex; gap: 0.5rem;">
+              <form method="post" action="/admin/dashboard/clients/{{ c.client_id }}/toggle-status" style="margin: 0;">
+                <input type="hidden" name="csrf_token" value="{{ csrf }}">
+                <button type="submit" class="btn sm secondary">
+                  {% if c.is_active %}Deactivate{% else %}Activate{% endif %}
+                </button>
+              </form>
+              <form method="post" action="/admin/dashboard/clients/{{ c.client_id }}/rotate-secret" style="margin: 0;" onsubmit="return confirm('Rotate client secret for &quot;{{ c.name }}&quot;? Any existing service using the current secret will immediately fail until reconfigured.');">
+                <input type="hidden" name="csrf_token" value="{{ csrf }}">
+                <button type="submit" class="btn sm secondary" style="border-color: #6b1419; color: var(--accent);">Rotate Secret</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">No clients registered yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

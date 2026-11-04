@@ -754,6 +754,106 @@ def main() -> None:
         sc_assigns = c.get(f"/admin/roles/assignments?email={sc_email}", headers=admin).json()
         assert "sc_member" in sc_assigns["user_roles"]
 
+        # 9. test admin client registration dashboard
+        # Static assets
+        logo_resp = c.get("/assets/logo.png")
+        assert logo_resp.status_code == 200
+        favicon_resp = c.get("/assets/favicon.svg")
+        assert favicon_resp.status_code == 200
+
+        # Currently c is logged in as sc_email (non-admin). Access should return 403
+        dash_forbidden = c.get("/admin/dashboard")
+        assert dash_forbidden.status_code == 403
+        assert "IdP admin role required" in dash_forbidden.text
+
+        # Log out -> unauthenticated access to /admin/dashboard redirects to /login
+        c.get("/logout", follow_redirects=False)
+        dash_anon = c.get("/admin/dashboard", follow_redirects=False)
+        assert dash_anon.status_code == 303
+        assert "/login?next=/admin/dashboard" in dash_anon.headers["location"]
+
+        # Admin access (vip_email) succeeds
+        vip_login = c.post(
+            "/login",
+            data={"email": vip_email, "password": password, "csrf_token": csrf_token(c.get("/login").text)},
+            follow_redirects=False,
+        )
+        assert vip_login.status_code == 303
+        dash_ok = c.get("/admin/dashboard")
+        assert dash_ok.status_code == 200
+        assert "OAUTH CLIENTS" in dash_ok.text
+        assert "REGISTER NEW CLIENT" in dash_ok.text
+
+        # Register a new client
+        new_client_name = "Payment Engine"
+        reg_resp = c.post(
+            "/admin/dashboard/clients",
+            data={
+                "name": new_client_name,
+                "redirect_uris": "https://payments.internal/callback\nhttp://localhost:4000/callback",
+                "post_logout_redirect_uris": "https://payments.internal/",
+                "scopes": ["openid", "email"],
+                "is_first_party": "true",
+                "csrf_token": csrf_token(dash_ok.text),
+            },
+        )
+        assert reg_resp.status_code == 200, f"Got {reg_resp.status_code}: {reg_resp.text}"
+        assert "registered successfully" in reg_resp.text
+        cid_match = re.search(r'id="revealed-cid"\s+readonly\s+value="([^"]+)"', reg_resp.text)
+        secret_match = re.search(r'id="revealed-secret"\s+readonly\s+value="([^"]+)"', reg_resp.text)
+        assert cid_match is not None and secret_match is not None
+        new_cid = cid_match.group(1)
+        new_secret = secret_match.group(1)
+
+        # Rotate secret
+        rotate_resp = c.post(
+            f"/admin/dashboard/clients/{new_cid}/rotate-secret",
+            data={"csrf_token": csrf_token(reg_resp.text)},
+        )
+        assert rotate_resp.status_code == 200
+        assert "New secret generated" in rotate_resp.text
+        rotated_secret = re.search(r'id="revealed-secret"\s+readonly\s+value="([^"]+)"', rotate_resp.text).group(1)
+        assert rotated_secret != new_secret
+
+        # Toggle status to inactive
+        toggle_resp = c.post(
+            f"/admin/dashboard/clients/{new_cid}/toggle-status",
+            data={"csrf_token": csrf_token(rotate_resp.text)},
+            follow_redirects=False,
+        )
+        assert toggle_resp.status_code == 303
+        dash_after_toggle = c.get("/admin/dashboard")
+        assert "INACTIVE" in dash_after_toggle.text
+
+        # Toggle back to active
+        toggle_back = c.post(
+            f"/admin/dashboard/clients/{new_cid}/toggle-status",
+            data={"csrf_token": csrf_token(dash_after_toggle.text)},
+            follow_redirects=False,
+        )
+        assert toggle_back.status_code == 303
+
+        # Test OAuth PKCE flow with this newly registered client
+        new_code, new_verifier = login_and_code(
+            new_cid,
+            "https://payments.internal/callback",
+            login_email=vip_email,
+            login_password=password,
+        )
+        new_tok = c.post(
+            "/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": new_code,
+                "redirect_uri": "https://payments.internal/callback",
+                "code_verifier": new_verifier,
+                "client_id": new_cid,
+                "client_secret": rotated_secret,
+            },
+        )
+        assert new_tok.status_code == 200, new_tok.text
+        assert "access_token" in new_tok.json()
+
     print("ok")
 
 

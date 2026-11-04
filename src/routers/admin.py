@@ -1,18 +1,21 @@
 import hmac
 import secrets
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Form, Header, HTTPException, Request
+from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.crypto import hash_token
+from src.core.crypto import csrf_ok, hash_token
 from src.core.deps import db_dep, s_dep
 from src.core.keys import rotate_keys
 from src.core.settings import Settings
+from src.html import page
 from src.models import IdpRole, OAuthClient, User
 from src.services.audit import audit
 from src.services.roles import (
+    RoleName,
     assign_role_to_user,
     ensure_role_exists,
     get_email_preassigned_roles,
@@ -21,6 +24,7 @@ from src.services.roles import (
     remove_preassigned_role_from_email,
     remove_role_from_user,
 )
+from src.services.sessions import load_session
 
 router = APIRouter(prefix="/admin")
 
@@ -193,4 +197,224 @@ async def get_assignments(
         "user_roles": user_roles,
         "preassigned_roles": preassigned,
     }
+
+
+def _parse_lines(text: str) -> list[str]:
+    lines: list[str] = []
+    for line in text.replace(",", "\n").splitlines():
+        item = line.strip()
+        if item and item not in lines:
+            lines.append(item)
+    return lines
+
+
+async def _get_admin_user(
+    request: Request,
+    session: AsyncSession,
+    settings: Settings,
+) -> tuple[User | None, Response | None]:
+    cookie = request.cookies.get(settings.cookie_name)
+    auth_session = await load_session(session, settings, cookie) if cookie else None
+    if not auth_session:
+        return None, RedirectResponse("/login?next=/admin/dashboard", status_code=303)
+    user = await session.get(User, auth_session.user_id)
+    if not user or not user.is_active:
+        return None, RedirectResponse("/login?next=/admin/dashboard", status_code=303)
+    user_roles = await get_user_roles(session, user.id)
+    if RoleName.ADMIN not in user_roles:
+        return None, page(request, settings, "error.html", status=403, error="Access forbidden: IdP admin role required.")
+    return user, None
+
+
+@router.get("")
+@router.get("/")
+async def admin_root():
+    return RedirectResponse("/admin/dashboard", status_code=303)
+
+
+@router.get("/dashboard")
+async def admin_dashboard(
+    request: Request,
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+):
+    admin_user, err_resp = await _get_admin_user(request, session, settings)
+    if err_resp:
+        return err_resp
+
+    clients = (
+        await session.execute(select(OAuthClient).order_by(OAuthClient.created_at.desc()))
+    ).scalars().all()
+    return page(
+        request,
+        settings,
+        "admin_dashboard.html",
+        current_user=admin_user,
+        clients=clients,
+    )
+
+
+@router.post("/dashboard/clients")
+async def admin_register_client(
+    request: Request,
+    name: str = Form(...),
+    redirect_uris: str = Form(...),
+    post_logout_redirect_uris: str = Form(""),
+    scopes: list[str] = Form(default_factory=list),
+    is_first_party: str | None = Form(None),
+    csrf_token: str = Form(...),
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+):
+    admin_user, err_resp = await _get_admin_user(request, session, settings)
+    if err_resp:
+        return err_resp
+
+    clients = (
+        await session.execute(select(OAuthClient).order_by(OAuthClient.created_at.desc()))
+    ).scalars().all()
+
+    if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
+        return page(
+            request,
+            settings,
+            "admin_dashboard.html",
+            status=400,
+            current_user=admin_user,
+            clients=clients,
+            flash_error="Invalid or expired form token. Please try again.",
+        )
+
+    r_uris = _parse_lines(redirect_uris)
+    if not r_uris:
+        return page(
+            request,
+            settings,
+            "admin_dashboard.html",
+            status=400,
+            current_user=admin_user,
+            clients=clients,
+            flash_error="At least one valid redirect URI is required.",
+        )
+
+    post_logout_uris = _parse_lines(post_logout_redirect_uris)
+    allowed_scopes = list(dict.fromkeys(["openid"] + [s.strip() for s in scopes if s.strip()]))
+    is_first_party_bool = is_first_party is not None and is_first_party.lower() in ("true", "1", "on", "yes")
+
+    cid = secrets.token_urlsafe(16)
+    secret = secrets.token_urlsafe(32)
+
+    new_client = OAuthClient(
+        client_id=cid,
+        name=name.strip(),
+        client_secret_hash=hash_token(settings.token_hash_pepper, secret),
+        redirect_uris=r_uris,
+        post_logout_redirect_uris=post_logout_uris,
+        allowed_scopes=allowed_scopes,
+        is_first_party=is_first_party_bool,
+        is_active=True,
+    )
+    session.add(new_client)
+    await audit(session, "admin_create_client", client_id=cid, detail={"name": name.strip(), "via": "dashboard"})
+    await session.commit()
+
+    all_clients = (
+        await session.execute(select(OAuthClient).order_by(OAuthClient.created_at.desc()))
+    ).scalars().all()
+
+    return page(
+        request,
+        settings,
+        "admin_dashboard.html",
+        current_user=admin_user,
+        clients=all_clients,
+        new_client_name=name.strip(),
+        new_client_id=cid,
+        new_secret=secret,
+        flash_message=f"Client '{name.strip()}' registered successfully.",
+    )
+
+
+@router.post("/dashboard/clients/{client_id}/rotate-secret")
+async def admin_rotate_client_secret(
+    client_id: str,
+    request: Request,
+    csrf_token: str = Form(...),
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+):
+    admin_user, err_resp = await _get_admin_user(request, session, settings)
+    if err_resp:
+        return err_resp
+
+    client = await session.get(OAuthClient, client_id)
+    clients = (
+        await session.execute(select(OAuthClient).order_by(OAuthClient.created_at.desc()))
+    ).scalars().all()
+
+    if not client:
+        return page(
+            request,
+            settings,
+            "admin_dashboard.html",
+            status=404,
+            current_user=admin_user,
+            clients=clients,
+            flash_error="Client not found.",
+        )
+
+    if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
+        return page(
+            request,
+            settings,
+            "admin_dashboard.html",
+            status=400,
+            current_user=admin_user,
+            clients=clients,
+            flash_error="Invalid or expired form token. Please try again.",
+        )
+
+    new_secret = secrets.token_urlsafe(32)
+    client.client_secret_hash = hash_token(settings.token_hash_pepper, new_secret)
+    await audit(session, "admin_rotate_client_secret", client_id=client_id, detail={"name": client.name, "via": "dashboard"})
+    await session.commit()
+
+    return page(
+        request,
+        settings,
+        "admin_dashboard.html",
+        current_user=admin_user,
+        clients=clients,
+        new_client_name=client.name,
+        new_client_id=client.client_id,
+        new_secret=new_secret,
+        flash_message=f"New secret generated for client '{client.name}'.",
+    )
+
+
+@router.post("/dashboard/clients/{client_id}/toggle-status")
+async def admin_toggle_client_status(
+    client_id: str,
+    request: Request,
+    csrf_token: str = Form(...),
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+):
+    admin_user, err_resp = await _get_admin_user(request, session, settings)
+    if err_resp:
+        return err_resp
+
+    if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
+        return page(request, settings, "error.html", status=400, error="Invalid form token.")
+
+    client = await session.get(OAuthClient, client_id)
+    if not client:
+        raise HTTPException(404, "Client not found")
+
+    client.is_active = not client.is_active
+    await audit(session, "admin_toggle_client_status", client_id=client_id, detail={"is_active": client.is_active, "via": "dashboard"})
+    await session.commit()
+
+    return RedirectResponse("/admin/dashboard", status_code=303)
+
 
