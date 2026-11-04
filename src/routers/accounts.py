@@ -71,6 +71,44 @@ def _csrf_fail(request, settings):
     return page(request, settings, "error.html", status=400, error="Invalid or expired form token.")
 
 
+async def _get_resend_cooldown(
+    session: AsyncSession,
+    settings: Settings,
+    user_id: uuid.UUID,
+    purpose: str,
+) -> int:
+    latest_created_at = (
+        await session.execute(
+            select(EmailToken.created_at)
+            .where(EmailToken.user_id == user_id, EmailToken.purpose == purpose)
+            .order_by(EmailToken.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if not latest_created_at:
+        return 0
+    now = datetime.now(UTC)
+    if latest_created_at.tzinfo is None:
+        latest_created_at = latest_created_at.replace(tzinfo=UTC)
+    elapsed = max(0.0, (now - latest_created_at).total_seconds())
+    return max(0, int(settings.otp_resend_cooldown - elapsed))
+
+
+async def _get_cooldown_for_email(
+    session: AsyncSession,
+    settings: Settings,
+    email: str,
+    purpose: str,
+) -> int:
+    email_n = email.strip().lower()
+    if not email_n:
+        return 0
+    user_id = (await session.execute(select(User.id).where(User.email == email_n))).scalar_one_or_none()
+    if not user_id:
+        return 0
+    return await _get_resend_cooldown(session, settings, user_id, purpose)
+
+
 async def _otp_page(
     request: Request,
     session: AsyncSession,
@@ -82,6 +120,7 @@ async def _otp_page(
     status: int = 200,
     error: str | None = None,
     message: str | None = None,
+    cooldown: int | None = None,
 ):
     client_name, cancel_url = await oauth_context(session, settings, next)
     action = "/reset-password/verify" if is_reset else "/verify-email"
@@ -89,6 +128,10 @@ async def _otp_page(
     title = "Reset password" if is_reset else "Verify your email"
     heading = "Enter reset code" if is_reset else "Verify your email"
     desc = f"We sent a 6-digit code to {email}." if email else "Enter the 6-digit code."
+    if cooldown is None:
+        cooldown = await _get_cooldown_for_email(
+            session, settings, email, "reset_password" if is_reset else "verify_email"
+        )
     return page(
         request,
         settings,
@@ -105,6 +148,7 @@ async def _otp_page(
         cancel_url=cancel_url,
         error=error,
         message=message,
+        cooldown=cooldown,
     )
 
 
@@ -332,8 +376,30 @@ async def verify_email_resend(
     email_n = email.strip().lower()
     user = (await session.execute(select(User).where(User.email == email_n))).scalar_one_or_none()
     if user and not user.email_verified:
+        cooldown = await _get_resend_cooldown(session, settings, user.id, "verify_email")
+        if cooldown > 0:
+            return await _otp_page(
+                request,
+                session,
+                settings,
+                is_reset=False,
+                email=email_n,
+                next=next,
+                status=429,
+                error=f"Please wait {cooldown} seconds before requesting a new code.",
+                cooldown=cooldown,
+            )
         if not await allow(session, f"otp_resend:{user.id}", 3, 600):
-            return await _otp_page(request, session, settings, is_reset=False, email=email_n, next=next, status=429, error="Too many resend attempts. Please wait a few minutes.")
+            return await _otp_page(
+                request,
+                session,
+                settings,
+                is_reset=False,
+                email=email_n,
+                next=next,
+                status=429,
+                error="Too many resend attempts. Please wait a few minutes.",
+            )
         code = generate_otp(6)
         session.add(
             EmailToken(
@@ -349,7 +415,26 @@ async def verify_email_resend(
             "Verify your email",
             f"Your verification code is: {code}\nThis code expires in 10 minutes.",
         )
-    return await _otp_page(request, session, settings, is_reset=False, email=email_n, next=next, message="A new verification code has been sent.")
+        return await _otp_page(
+            request,
+            session,
+            settings,
+            is_reset=False,
+            email=email_n,
+            next=next,
+            message="A new verification code has been sent.",
+            cooldown=settings.otp_resend_cooldown,
+        )
+    return await _otp_page(
+        request,
+        session,
+        settings,
+        is_reset=False,
+        email=email_n,
+        next=next,
+        message="A new verification code has been sent.",
+        cooldown=settings.otp_resend_cooldown,
+    )
 
 
 @router.get("/login")
@@ -634,8 +719,30 @@ async def reset_resend(
     email_n = email.strip().lower()
     user = (await session.execute(select(User).where(User.email == email_n))).scalar_one_or_none()
     if user and user.is_active:
+        cooldown = await _get_resend_cooldown(session, settings, user.id, "reset_password")
+        if cooldown > 0:
+            return await _otp_page(
+                request,
+                session,
+                settings,
+                is_reset=True,
+                email=email_n,
+                next=next,
+                status=429,
+                error=f"Please wait {cooldown} seconds before requesting a new code.",
+                cooldown=cooldown,
+            )
         if not await allow(session, f"pwd_otp_resend:{user.id}", 3, 600):
-            return await _otp_page(request, session, settings, is_reset=True, email=email_n, next=next, status=429, error="Too many resend attempts. Please wait a few minutes.")
+            return await _otp_page(
+                request,
+                session,
+                settings,
+                is_reset=True,
+                email=email_n,
+                next=next,
+                status=429,
+                error="Too many resend attempts. Please wait a few minutes.",
+            )
         code = generate_otp(6)
         session.add(
             EmailToken(
@@ -651,7 +758,26 @@ async def reset_resend(
             "Reset your password",
             f"Your password reset code is: {code}\nThis code expires in 10 minutes.",
         )
-    return await _otp_page(request, session, settings, is_reset=True, email=email_n, next=next, message="A new reset code has been sent.")
+        return await _otp_page(
+            request,
+            session,
+            settings,
+            is_reset=True,
+            email=email_n,
+            next=next,
+            message="A new reset code has been sent.",
+            cooldown=settings.otp_resend_cooldown,
+        )
+    return await _otp_page(
+        request,
+        session,
+        settings,
+        is_reset=True,
+        email=email_n,
+        next=next,
+        message="A new reset code has been sent.",
+        cooldown=settings.otp_resend_cooldown,
+    )
 
 
 @router.get("/reset-password")

@@ -186,6 +186,13 @@
       border-color: var(--border-hover);
       color: #FFFFFF;
     }
+    button:disabled, .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      border-color: var(--border);
+      color: var(--text-disabled);
+      pointer-events: none;
+    }
     button.sm, .btn.sm {
       height: 36px;
       padding: 0 0.85rem;

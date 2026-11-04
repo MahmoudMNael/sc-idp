@@ -36,6 +36,7 @@ Copy `.env.example` to `.env` and configure every required parameter. The `.env.
 | `KEY_RETIRE_SECONDS` | `3600` | Overlap duration retiring RSA keys remain in JWKS after rotation. |
 | `OTP_TTL` | `600` | Expiration window for 6-digit email OTPs (10 minutes). |
 | `OTP_MAX_ATTEMPTS` | `5` | Maximum failed OTP attempts before lockout. |
+| `OTP_RESEND_COOLDOWN` | `30` | Minimum cooldown in seconds between OTP resend requests. |
 | `COMPANY_DOMAIN` | `shortcircuitcompany.com` | Email domain eligible for automatic internal role assignment. |
 | `COMPANY_ROLE` | `sc_member` | Role automatically granted to verified company domain accounts. |
 | `MAIL_BACKEND` | `console` | `console` (prints to stdout) or `smtp`. |
