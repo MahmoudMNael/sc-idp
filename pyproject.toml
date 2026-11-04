@@ -31,4 +31,4 @@ where = ["."]
 include = ["src*"]
 
 [tool.setuptools.package-data]
-src = ["templates/*.html"]
+src = ["templates/*.html", "templates/**/*.html"]

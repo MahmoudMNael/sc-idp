@@ -1,0 +1,39 @@
+{% extends "mail/base.html" %}
+{% block title %}Application Connected — Short Circuit{% endblock %}
+{% block content %}
+<h1 style="margin: 0 0 12px 0; font-size: 22px; font-weight: 600; color: #111111; letter-spacing: -0.01em;">
+  Application connected
+</h1>
+<p style="margin: 0 0 16px 0; font-size: 15px; line-height: 1.6; color: #4B5563;">
+  Your Short Circuit account was successfully connected to <strong style="color: #111111;">{{ client_name }}</strong>.
+</p>
+
+<!-- Connected Details Box -->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin: 24px 0; background-color: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 8px;">
+  <tr>
+    <td style="padding: 16px 20px; font-size: 13px; line-height: 1.6; color: #4B5563;">
+      <div style="margin-bottom: 6px;"><span style="color: #6B7280; font-weight: 500;">Application:</span> <strong style="color: #111111;">{{ client_name }}</strong></div>
+      <div style="margin-bottom: 6px;"><span style="color: #6B7280; font-weight: 500;">Authorized scopes:</span> <code style="font-family: 'JetBrains Mono', Menlo, Monaco, monospace; font-size: 12px; background-color: #EFF1F5; padding: 2px 6px; border-radius: 4px; color: #1F2937;">{{ scopes }}</code></div>
+      <div><span style="color: #6B7280; font-weight: 500;">Account:</span> <span style="color: #111111;">{{ to }}</span></div>
+    </td>
+  </tr>
+</table>
+
+<!-- Button -->
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 28px 0 24px 0;">
+  <tr>
+    <td align="center" style="border-radius: 8px; background-color: #EB1B26;">
+      <a href="{{ base_url }}/account" target="_blank" style="display: inline-block; padding: 13px 28px; font-family: 'Poppins', -apple-system, sans-serif; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: #FFFFFF; text-decoration: none; border-radius: 8px;">
+        Review Account Settings
+      </a>
+    </td>
+  </tr>
+</table>
+
+<p style="margin: 24px 0 0 0; font-size: 13px; line-height: 1.6; color: #6B7280;">
+  <strong style="color: #111111;">Didn't authorize this?</strong> If you did not link this application to your account, change your password immediately and review active sessions.
+</p>
+{% endblock %}
+{% block footer_note %}
+You received this security alert because access to your Short Circuit identity was granted to {{ client_name }}.
+{% endblock %}
