@@ -1,34 +1,76 @@
 {% extends "base.html" %}
 {% block title %}Account{% endblock %}
+{% block main_class %}container-xl{% endblock %}
 {% block body %}
-<h1>Account</h1>
-<p>Signed in as <strong>{{ email }}</strong>{% if email_verified %} (verified){% else %} (email not verified){% endif %}.</p>
-{% if totp_enabled %}
-  <p>Authenticator app is <strong>on</strong>.</p>
-  <form method="post" action="/account/mfa/disable">
-    <input type="hidden" name="csrf_token" value="{{ csrf }}">
-    <label for="code">Authenticator or recovery code to disable</label>
-    <input id="code" name="code" required>
-    <button type="submit">Disable MFA</button>
-  </form>
-{% elif pending_uri %}
-  <p>Scan this with your authenticator app, then enter a code to enable MFA.</p>
-  <p class="muted"><code>{{ pending_uri }}</code></p>
-  <form method="post" action="/account/mfa/enable">
-    <input type="hidden" name="csrf_token" value="{{ csrf }}">
-    <label for="code">Authenticator code</label>
-    <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" required>
-    <button type="submit">Enable MFA</button>
-  </form>
-{% else %}
-  <form method="post" action="/account/mfa/setup">
-    <input type="hidden" name="csrf_token" value="{{ csrf }}">
-    <button type="submit">Set up authenticator</button>
-  </form>
-{% endif %}
-{% if recovery_codes %}
-  <p class="ok">Store these recovery codes. They will not be shown again.</p>
-  <ul>{% for c in recovery_codes %}<li><code>{{ c }}</code></li>{% endfor %}</ul>
-{% endif %}
-<p class="muted"><a href="/logout">Sign out</a></p>
+<h1>Account Settings</h1>
+
+<div class="sc-grid-2">
+  <div class="sc-card">
+    <h2>Profile Information</h2>
+    <p class="muted">
+      Signed in as <strong>{{ email }}</strong>
+      {% if email_verified %}
+        <span class="badge badge-success">Verified</span>
+      {% else %}
+        <span class="badge badge-accent">Unverified</span>
+      {% endif %}
+    </p>
+
+    <form method="post" action="/account/profile" style="margin-top: 1.5rem;">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+        <div>
+          <label for="first_name">First Name</label>
+          <input id="first_name" name="first_name" type="text" value="{{ first_name }}" placeholder="Jane">
+        </div>
+        <div>
+          <label for="last_name">Last Name</label>
+          <input id="last_name" name="last_name" type="text" value="{{ last_name }}" placeholder="Doe">
+        </div>
+      </div>
+
+      <button type="submit" style="margin-top: 1.25rem;">Save Profile</button>
+    </form>
+  </div>
+
+  <div class="sc-card">
+    <h2>Security & 2FA</h2>
+    {% if totp_enabled %}
+      <p>Authenticator app is <span class="badge badge-success">Enabled</span></p>
+      <form method="post" action="/account/mfa/disable" style="margin-top: 1rem;">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <label for="code">Authenticator or recovery code to disable</label>
+        <input id="code" name="code" required placeholder="Enter code">
+        <button type="submit" class="secondary" style="margin-top: 1rem;">Disable MFA</button>
+      </form>
+    {% elif pending_uri %}
+      <p class="muted">Scan this with your authenticator app, then enter a code to enable MFA.</p>
+      <p class="muted"><code>{{ pending_uri }}</code></p>
+      <form method="post" action="/account/mfa/enable" style="margin-top: 1rem;">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <label for="code">Authenticator code</label>
+        <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="000000">
+        <button type="submit" style="margin-top: 1rem;">Enable MFA</button>
+      </form>
+    {% else %}
+      <p class="muted">Add two-factor authentication to secure your account.</p>
+      <form method="post" action="/account/mfa/setup" style="margin-top: 1rem;">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button type="submit">Set up authenticator</button>
+      </form>
+    {% endif %}
+
+    {% if recovery_codes %}
+      <div style="margin-top: 1.5rem;">
+        <p class="ok">Store these recovery codes. They will not be shown again.</p>
+        <ul style="font-family: var(--font-mono); font-size: 0.85rem; columns: 2;">
+          {% for c in recovery_codes %}<li><code>{{ c }}</code></li>{% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+<p class="muted" style="margin-top: 1.5rem;"><a href="/logout">Sign out</a></p>
 {% endblock %}

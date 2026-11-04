@@ -30,6 +30,8 @@ class User(Base):
     id: Mapped[uuid.UUID] = _uuid()
     email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    first_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     totp_secret_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     totp_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

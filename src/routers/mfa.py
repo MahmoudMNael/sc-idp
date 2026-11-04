@@ -9,7 +9,7 @@ from src.core.deps import db_dep, ip_of, s_dep
 from src.core.settings import Settings
 from src.html import page
 from src.models import MfaRecoveryCode, User
-from src.routers.accounts import after_login_target
+from src.routers.accounts import after_login_target, oauth_context
 from src.services.audit import audit
 from src.services.sessions import create_session, load_session, set_session_cookie
 
@@ -57,7 +57,8 @@ async def mfa_form(request: Request, next: str = "", settings: Settings = s_dep,
     sess, user = await _user_session(request, session, settings)
     if sess is None or user is None:
         return RedirectResponse("/login", status_code=302)
-    return page(request, settings, "mfa.html", next=next, error=None, action="/login/mfa")
+    client_name, cancel_url = await oauth_context(session, settings, next)
+    return page(request, settings, "mfa.html", next=next, client_name=client_name, cancel_url=cancel_url, error=None, action="/login/mfa")
 
 
 @router.post("/login/mfa")
@@ -76,7 +77,9 @@ async def mfa_submit(
         return RedirectResponse("/login", status_code=303)
     if not await _check_otp_or_recovery(session, settings, user, code):
         await audit(session, "mfa_failure", user_id=user.id, ip=ip_of(request))
-        return page(request, settings, "mfa.html", status=401, next=next, error="Invalid code.", action="/login/mfa")
+        client_name, cancel_url = await oauth_context(session, settings, next)
+        return page(request, settings, "mfa.html", status=401, next=next, client_name=client_name, cancel_url=cancel_url, error="Invalid code.", action="/login/mfa")
+
     raw = await create_session(
         session,
         settings,
@@ -92,6 +95,7 @@ async def mfa_submit(
     return response
 
 
+@router.get("/account")
 @router.get("/account/mfa")
 async def account_mfa(request: Request, session: AsyncSession = db_dep, settings: Settings = s_dep):
     sess, user = await _user_session(request, session, settings)
@@ -105,12 +109,35 @@ async def account_mfa(request: Request, session: AsyncSession = db_dep, settings
         request,
         settings,
         "account.html",
+        first_name=user.first_name or "",
+        last_name=user.last_name or "",
         email=user.email,
         email_verified=user.email_verified,
         totp_enabled=user.totp_enabled,
         pending_uri=pending_uri,
         recovery_codes=None,
     )
+
+
+@router.post("/account/profile")
+async def account_profile(
+    request: Request,
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+    first_name: str = Form(""),
+    last_name: str = Form(""),
+    csrf_token: str = Form(""),
+):
+    if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
+        return page(request, settings, "error.html", status=400, error="Invalid or expired form token.")
+    sess, user = await _user_session(request, session, settings)
+    if sess is None or user is None:
+        return RedirectResponse("/login", status_code=303)
+    user.first_name = first_name.strip() or None
+    user.last_name = last_name.strip() or None
+    await audit(session, "profile_updated", user_id=user.id, ip=ip_of(request))
+    return RedirectResponse("/account/mfa", status_code=303)
+
 
 
 @router.post("/account/mfa/setup")

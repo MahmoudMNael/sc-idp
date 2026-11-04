@@ -37,6 +37,14 @@ async def userinfo(
     if "email" in scopes_set:
         body["email"] = user.email
         body["email_verified"] = user.email_verified
+    if "profile" in scopes_set:
+        if user.first_name:
+            body["given_name"] = user.first_name
+        if user.last_name:
+            body["family_name"] = user.last_name
+        full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+        if full_name:
+            body["name"] = full_name
     if "idp_roles" in scopes_set or "roles" in scopes_set:
         from src.services.roles import get_user_roles
 

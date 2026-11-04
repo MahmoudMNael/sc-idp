@@ -107,7 +107,11 @@ def main() -> None:
         assert disc["code_challenge_methods_supported"] == ["S256"]
         assert disc["id_token_signing_alg_values_supported"] == ["RS256"]
         assert "idp_roles" in disc["scopes_supported"]
+        assert "profile" in disc["scopes_supported"]
         assert "idp_roles" in disc["claims_supported"]
+        assert "given_name" in disc["claims_supported"]
+        assert "family_name" in disc["claims_supported"]
+        assert "name" in disc["claims_supported"]
         assert "at_hash" in disc["claims_supported"]
 
         # RFC 8414 OAuth authorization server metadata alias
@@ -189,9 +193,23 @@ def main() -> None:
         accounts_mod.send_mail = fake_send_mail
 
         reg = c.get("/register")
-        r = c.post(
+        bad_reg = c.post(
             "/register",
             data={"email": email, "password": password, "csrf_token": csrf_token(reg.text)},
+            follow_redirects=False,
+        )
+        assert bad_reg.status_code == 400
+        assert "first name and last name are required" in bad_reg.text.lower()
+
+        r = c.post(
+            "/register",
+            data={
+                "first_name": "Test",
+                "last_name": "User",
+                "email": email,
+                "password": password,
+                "csrf_token": csrf_token(bad_reg.text),
+            },
             follow_redirects=False,
         )
         assert r.status_code == 303, r.text
@@ -553,7 +571,13 @@ def main() -> None:
         reg2 = c.get("/register")
         r2 = c.post(
             "/register",
-            data={"email": email2, "password": password, "csrf_token": csrf_token(reg2.text)},
+            data={
+                "first_name": "User",
+                "last_name": "Two",
+                "email": email2,
+                "password": password,
+                "csrf_token": csrf_token(reg2.text),
+            },
             follow_redirects=False,
         )
         assert r2.status_code == 303
@@ -642,7 +666,13 @@ def main() -> None:
         vip_reg = c.get("/register")
         vip_r = c.post(
             "/register",
-            data={"email": vip_email, "password": password, "csrf_token": csrf_token(vip_reg.text)},
+            data={
+                "first_name": "Vip",
+                "last_name": "User",
+                "email": vip_email,
+                "password": password,
+                "csrf_token": csrf_token(vip_reg.text),
+            },
             follow_redirects=False,
         )
         assert vip_r.status_code == 303
@@ -773,7 +803,13 @@ def main() -> None:
         sc_reg = c.get("/register")
         sc_r = c.post(
             "/register",
-            data={"email": sc_email, "password": password, "csrf_token": csrf_token(sc_reg.text)},
+            data={
+                "first_name": "Alice",
+                "last_name": "Smith",
+                "email": sc_email,
+                "password": password,
+                "csrf_token": csrf_token(sc_reg.text),
+            },
             follow_redirects=False,
         )
         assert sc_r.status_code == 303
@@ -889,7 +925,154 @@ def main() -> None:
         assert new_tok.status_code == 200, new_tok.text
         assert "access_token" in new_tok.json()
 
+        # Test OAuth UI context and /cancel redirect flow
+        v, ch = pkce()
+        cancel_state = "state-cancel-123"
+        az_cancel = c.get(
+            "/authorize",
+            params={
+                "client_id": client_a["client_id"],
+                "redirect_uri": "http://appa.test/callback",
+                "response_type": "code",
+                "scope": "openid email",
+                "code_challenge": ch,
+                "code_challenge_method": "S256",
+                "state": cancel_state,
+                "prompt": "login",
+            },
+            follow_redirects=False,
+        )
+        assert az_cancel.status_code == 302
+        login_target = az_cancel.headers["location"]
+        login_view = c.get(login_target)
+        assert login_view.status_code == 200
+        assert "to continue to" in login_view.text and ">A<" in login_view.text
+        nxt_val = parse_qs(urlparse(login_target).query).get("next", [""])[0]
+        assert f"/register?next={nxt_val}" in login_view.text
+        assert f"/forgot-password?next={nxt_val}" in login_view.text
+        assert f"/cancel?next={nxt_val}" in login_view.text
+
+        # Clicking cancel redirects to client callback with access_denied
+        cancel_resp = c.get(f"/cancel?next={nxt_val}", follow_redirects=False)
+        assert cancel_resp.status_code == 302
+        cancel_loc = cancel_resp.headers["location"]
+        assert cancel_loc.startswith("http://appa.test/callback")
+        cancel_query = parse_qs(urlparse(cancel_loc).query)
+        assert cancel_query.get("error") == ["access_denied"]
+        assert cancel_query.get("state") == [cancel_state]
+
+        # Test profile editing via /account/profile
+        c.get("/logout", follow_redirects=False)
+        loc_l = c.get("/login")
+        c.post(
+            "/login",
+            data={
+                "email": vip_email,
+                "password": password,
+                "csrf_token": csrf_token(loc_l.text),
+            },
+            follow_redirects=False,
+        )
+        acc_page = c.get("/account/mfa")
+        prof_update = c.post(
+            "/account/profile",
+            data={
+                "first_name": "Alexander",
+                "last_name": "Graham",
+                "csrf_token": csrf_token(acc_page.text),
+            },
+            follow_redirects=False,
+        )
+        assert prof_update.status_code == 303
+        acc_updated = c.get("/account/mfa")
+        assert 'value="Alexander"' in acc_updated.text
+        assert 'value="Graham"' in acc_updated.text
+
+        # Test OAuth flow with scope "openid email profile"
+        p_client = c.post(
+            "/admin/clients",
+            headers=admin,
+            json={
+                "name": "ProfileClient",
+                "redirect_uris": ["http://profile.test/callback"],
+                "allowed_scopes": ["openid", "email", "profile"],
+                "is_first_party": True,
+            },
+        )
+        assert p_client.status_code == 200
+        p_cid = p_client.json()["client_id"]
+        p_secret = p_client.json()["client_secret"]
+
+        p_code, p_ver = login_and_code(
+            p_cid,
+            "http://profile.test/callback",
+            scope="openid email profile",
+            login_email=vip_email,
+            login_password=password,
+        )
+        p_token_resp = c.post(
+            "/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": p_code,
+                "redirect_uri": "http://profile.test/callback",
+                "code_verifier": p_ver,
+                "client_id": p_cid,
+                "client_secret": p_secret,
+            },
+        )
+        assert p_token_resp.status_code == 200
+        p_tokens = p_token_resp.json()
+        assert "access_token" in p_tokens
+        assert "id_token" in p_tokens
+
+        # Check /userinfo returns given_name, family_name, name
+        p_userinfo = c.get("/userinfo", headers={"Authorization": f"Bearer {p_tokens['access_token']}"})
+        assert p_userinfo.status_code == 200
+        uinfo = p_userinfo.json()
+        assert uinfo.get("given_name") == "Alexander"
+        assert uinfo.get("family_name") == "Graham"
+        assert uinfo.get("name") == "Alexander Graham"
+
+        # Check ID token payload contains given_name, family_name, name
+        from joserfc.jwk import KeySet
+        id_claims_p = jwt.decode(p_tokens["id_token"], KeySet.import_key_set(jwks)).claims
+        assert id_claims_p.get("given_name") == "Alexander"
+        assert id_claims_p.get("family_name") == "Graham"
+        assert id_claims_p.get("name") == "Alexander Graham"
+
+        # Check that when client requests only "openid email", profile claims are NOT included
+        no_prof_code, no_prof_ver = login_and_code(
+            p_cid,
+            "http://profile.test/callback",
+            scope="openid email",
+            login_email=vip_email,
+            login_password=password,
+        )
+        no_prof_resp = c.post(
+            "/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": no_prof_code,
+                "redirect_uri": "http://profile.test/callback",
+                "code_verifier": no_prof_ver,
+                "client_id": p_cid,
+                "client_secret": p_secret,
+            },
+        )
+        assert no_prof_resp.status_code == 200
+        no_prof_tokens = no_prof_resp.json()
+        no_prof_uinfo = c.get("/userinfo", headers={"Authorization": f"Bearer {no_prof_tokens['access_token']}"}).json()
+        assert "given_name" not in no_prof_uinfo
+        assert "family_name" not in no_prof_uinfo
+        assert "name" not in no_prof_uinfo
+        no_prof_id_claims = jwt.decode(no_prof_tokens["id_token"], KeySet.import_key_set(jwks)).claims
+        assert "given_name" not in no_prof_id_claims
+        assert "family_name" not in no_prof_id_claims
+        assert "name" not in no_prof_id_claims
+
     print("ok")
+
 
 
 if __name__ == "__main__":

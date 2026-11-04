@@ -32,6 +32,9 @@ ALLOWED_CLAIMS = frozenset(
         "typ",
         "email",
         "email_verified",
+        "given_name",
+        "family_name",
+        "name",
         "idp_roles",
     }
 )
@@ -145,6 +148,14 @@ async def _mint_pair(
     if "email" in scopes_set:
         id_claims["email"] = user.email
         id_claims["email_verified"] = user.email_verified
+    if "profile" in scopes_set:
+        if user.first_name:
+            id_claims["given_name"] = user.first_name
+        if user.last_name:
+            id_claims["family_name"] = user.last_name
+        full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+        if full_name:
+            id_claims["name"] = full_name
     if "idp_roles" in scopes_set or "roles" in scopes_set:
         from src.services.roles import get_user_roles
 

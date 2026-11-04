@@ -33,7 +33,7 @@ class ClientIn(BaseModel):
     name: str
     redirect_uris: list[str] = Field(min_length=1)
     post_logout_redirect_uris: list[str] = Field(default_factory=list)
-    allowed_scopes: list[str] = Field(default_factory=lambda: ["openid", "email"])
+    allowed_scopes: list[str] = Field(default_factory=lambda: ["openid", "email", "profile"])
     is_first_party: bool = True
     client_id: str | None = None
 

@@ -1,12 +1,36 @@
 {% extends "base.html" %}
-{% block title %}Authorize{% endblock %}
-{% block body %}
-<h1>Authorize {{ client_name }}</h1>
-<p>This application wants to know who you are ({{ scopes }}).</p>
-<form method="post" action="/consent">
-  <input type="hidden" name="csrf_token" value="{{ csrf }}">
-  <input type="hidden" name="next" value="{{ next }}">
-  <button type="submit" name="decision" value="allow">Allow</button>
-  <button type="submit" name="decision" value="deny" class="secondary">Deny</button>
-</form>
+{% block title %}Authorize application{% endblock %}
+{% block header %}{% endblock %}
+{% block content %}
+<main class="auth-viewport">
+  <div class="auth-card">
+    <a href="/"><img src="/assets/logo.png" alt="Short Circuit" class="auth-logo"></a>
+    <h1 class="auth-title">Authorize Access</h1>
+    <p class="auth-subtitle">
+      <span class="auth-client-target">{{ client_name }}</span> is requesting access to your account
+    </p>
+
+    <div style="background: var(--surface-elevated); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; margin: 1.5rem 0; text-align: left;">
+      <div style="font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.6rem; letter-spacing: 0.05em;">Permissions Requested</div>
+      <div style="display: flex; flex-wrap: wrap; gap: 0.4rem;">
+        {% for s in scopes.split() %}
+          <span class="badge badge-accent">{{ s }}</span>
+        {% endfor %}
+      </div>
+    </div>
+
+    <form method="post" action="/consent">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="next" value="{{ next }}">
+      <button type="submit" name="decision" value="allow" class="btn-block">Allow</button>
+      <button type="submit" name="decision" value="deny" class="secondary btn-block" style="margin-top: 0.6rem;">Deny</button>
+    </form>
+
+    <div class="auth-footer">
+      {% if cancel_url %}
+        <a href="{{ cancel_url }}" class="auth-cancel">Cancel and return to {{ client_name }}</a>
+      {% endif %}
+    </div>
+  </div>
+</main>
 {% endblock %}
