@@ -2,11 +2,8 @@
 {% block title %}OAuth Clients — Admin Dashboard | Short Circuit IdP{% endblock %}
 
 {% block nav %}
-  <span class="badge badge-accent">IDP ADMIN</span>
-  <span class="muted" style="font-size: 0.825rem;">{{ current_user.email }}</span>
   <a href="/admin/dashboard" class="active">OAuth Clients</a>
-  <a href="/account">Account</a>
-  <a href="/logout">Sign out</a>
+  {{ super() }}
 {% endblock %}
 
 {% block main_class %}container-xl{% endblock %}

@@ -1,76 +1,207 @@
 {% extends "base.html" %}
-{% block title %}Account{% endblock %}
+{% block title %}Account Settings — Short Circuit IdP{% endblock %}
 {% block main_class %}container-xl{% endblock %}
 {% block body %}
-<h1>Account Settings</h1>
+<div style="margin-bottom: 1.5rem;">
+  <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em; color: var(--accent); text-transform: uppercase; margin-bottom: 0.4rem; font-weight: 600;">IDENTITY & ACCESS</div>
+  <h1>ACCOUNT SETTINGS</h1>
+  <p class="muted" style="margin-top: -0.5rem; margin-bottom: 1rem; max-width: 680px;">
+    Manage your profile credentials, personal details, authentication security, and multi-factor authorization.
+  </p>
+</div>
 
-<div class="sc-grid-2">
+{% if message %}
+  <div class="ok" role="alert" style="margin-bottom: 1.5rem;">{{ message }}</div>
+{% endif %}
+
+{% if error %}
+  <div class="error" role="alert" style="margin-bottom: 1.5rem;">{{ error }}</div>
+{% endif %}
+
+<!-- Tabs Navigation -->
+<div class="sc-tabs" id="accountTabs" role="tablist">
+  <button type="button" class="sc-tab-btn {% if tab != 'security' %}active{% endif %}" id="tab-profile-btn" onclick="switchTab('profile')" role="tab" aria-selected="{% if tab != 'security' %}true{% else %}false{% endif %}">
+    Profile Information
+  </button>
+  <button type="button" class="sc-tab-btn {% if tab == 'security' %}active{% endif %}" id="tab-security-btn" onclick="switchTab('security')" role="tab" aria-selected="{% if tab == 'security' %}true{% else %}false{% endif %}">
+    Security & Password
+  </button>
+</div>
+
+<!-- Tab Content: Profile -->
+<div id="tab-profile" style="{% if tab == 'security' %}display: none;{% else %}display: block;{% endif %} max-width: 760px;">
   <div class="sc-card">
-    <h2>Profile Information</h2>
-    <p class="muted">
-      Signed in as <strong>{{ email }}</strong>
-      {% if email_verified %}
-        <span class="badge badge-success">Verified</span>
-      {% else %}
-        <span class="badge badge-accent">Unverified</span>
-      {% endif %}
+    <h2>PROFILE DETAILS</h2>
+    <p class="muted" style="margin-top: -0.5rem; margin-bottom: 1.5rem;">
+      Your profile identity across Short Circuit applications and connected services.
     </p>
 
-    <form method="post" action="/account/profile" style="margin-top: 1.5rem;">
+    <div style="padding: 1rem; background: var(--surface-elevated); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem;">
+      <div>
+        <div style="font-size: 0.75rem; font-family: var(--font-mono); text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em;">Account Email</div>
+        <div style="font-weight: 600; font-size: 1rem; color: var(--text); margin-top: 0.2rem;">{{ email }}</div>
+      </div>
+      <div>
+        {% if email_verified %}
+          <span class="badge badge-success">Verified</span>
+        {% else %}
+          <span class="badge badge-accent">Unverified</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <form method="post" action="/account/profile">
       <input type="hidden" name="csrf_token" value="{{ csrf }}">
 
-      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+      <div class="sc-grid-2">
         <div>
           <label for="first_name">First Name</label>
-          <input id="first_name" name="first_name" type="text" value="{{ first_name }}" placeholder="Jane">
+          <input id="first_name" name="first_name" type="text" value="{{ first_name }}" placeholder="First name">
+          <p class="muted" style="font-size: 0.775rem; margin-top: 0.35rem;">Leave untouched to keep current first name.</p>
         </div>
         <div>
           <label for="last_name">Last Name</label>
-          <input id="last_name" name="last_name" type="text" value="{{ last_name }}" placeholder="Doe">
+          <input id="last_name" name="last_name" type="text" value="{{ last_name }}" placeholder="Last name">
+          <p class="muted" style="font-size: 0.775rem; margin-top: 0.35rem;">Leave untouched to keep current last name.</p>
         </div>
       </div>
 
-      <button type="submit" style="margin-top: 1.25rem;">Save Profile</button>
-    </form>
-  </div>
-
-  <div class="sc-card">
-    <h2>Security & 2FA</h2>
-    {% if totp_enabled %}
-      <p>Authenticator app is <span class="badge badge-success">Enabled</span></p>
-      <form method="post" action="/account/mfa/disable" style="margin-top: 1rem;">
-        <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <label for="code">Authenticator or recovery code to disable</label>
-        <input id="code" name="code" required placeholder="Enter code">
-        <button type="submit" class="secondary" style="margin-top: 1rem;">Disable MFA</button>
-      </form>
-    {% elif pending_uri %}
-      <p class="muted">Scan this with your authenticator app, then enter a code to enable MFA.</p>
-      <p class="muted"><code>{{ pending_uri }}</code></p>
-      <form method="post" action="/account/mfa/enable" style="margin-top: 1rem;">
-        <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <label for="code">Authenticator code</label>
-        <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="000000">
-        <button type="submit" style="margin-top: 1rem;">Enable MFA</button>
-      </form>
-    {% else %}
-      <p class="muted">Add two-factor authentication to secure your account.</p>
-      <form method="post" action="/account/mfa/setup" style="margin-top: 1rem;">
-        <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <button type="submit">Set up authenticator</button>
-      </form>
-    {% endif %}
-
-    {% if recovery_codes %}
-      <div style="margin-top: 1.5rem;">
-        <p class="ok">Store these recovery codes. They will not be shown again.</p>
-        <ul style="font-family: var(--font-mono); font-size: 0.85rem; columns: 2;">
-          {% for c in recovery_codes %}<li><code>{{ c }}</code></li>{% endfor %}
-        </ul>
+      <div style="margin-top: 1.5rem; display: flex; justify-content: flex-start;">
+        <button type="submit">SAVE PROFILE</button>
       </div>
-    {% endif %}
+    </form>
   </div>
 </div>
 
-<p class="muted" style="margin-top: 1.5rem;"><a href="/logout">Sign out</a></p>
+<!-- Tab Content: Security -->
+<div id="tab-security" style="{% if tab != 'security' %}display: none;{% else %}display: block;{% endif %}">
+  <div class="sc-grid-2">
+    <!-- Change Password Card -->
+    <div class="sc-card">
+      <h2>CHANGE PASSWORD</h2>
+      <p class="muted" style="margin-top: -0.5rem; margin-bottom: 1.5rem;">
+        Update your login password. Changing your password immediately revokes all other active device sessions.
+      </p>
+
+      <form method="post" action="/account/password" autocomplete="off">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+
+        <div>
+          <label for="current_password">Current Password</label>
+          <div class="password-wrapper">
+            <input id="current_password" name="current_password" type="password" required autocomplete="current-password" placeholder="Enter current password">
+            <button type="button" class="password-toggle-btn" onclick="togglePassword(this)" aria-label="Show password">
+              <svg class="eye-open" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+              <svg class="eye-closed" style="display:none;" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <label for="new_password">New Password</label>
+          <div class="password-wrapper">
+            <input id="new_password" name="new_password" type="password" required minlength="8" autocomplete="new-password" placeholder="At least 8 characters">
+            <button type="button" class="password-toggle-btn" onclick="togglePassword(this)" aria-label="Show password">
+              <svg class="eye-open" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+              <svg class="eye-closed" style="display:none;" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <label for="confirm_password">Confirm New Password</label>
+          <div class="password-wrapper">
+            <input id="confirm_password" name="confirm_password" type="password" required minlength="8" autocomplete="new-password" placeholder="Confirm new password">
+            <button type="button" class="password-toggle-btn" onclick="togglePassword(this)" aria-label="Show password">
+              <svg class="eye-open" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+              <svg class="eye-closed" style="display:none;" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <button type="submit" style="margin-top: 1.5rem;">UPDATE PASSWORD</button>
+      </form>
+    </div>
+
+    <!-- Two-Factor Authentication Card -->
+    <div class="sc-card">
+      <h2>TWO-FACTOR AUTHENTICATION</h2>
+      <p class="muted" style="margin-top: -0.5rem; margin-bottom: 1.5rem;">
+        Add an extra layer of defense using time-based one-time passwords (TOTP).
+      </p>
+
+      {% if totp_enabled %}
+        <div style="padding: 1rem; background: #0c2b18; border: 1px solid #134e2c; border-radius: 8px; margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between;">
+          <div>
+            <div style="font-weight: 600; color: #4ade80;">MFA Status</div>
+            <div class="muted" style="font-size: 0.8rem; margin-top: 0.15rem;">Authenticator app active</div>
+          </div>
+          <span class="badge badge-success">ACTIVE</span>
+        </div>
+
+        <form method="post" action="/account/mfa/disable">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <label for="code">Authenticator or recovery code to disable</label>
+          <input id="code" name="code" required placeholder="Enter code">
+          <button type="submit" class="secondary" style="margin-top: 1.25rem;">DISABLE MFA</button>
+        </form>
+      {% elif pending_uri %}
+        <div style="padding: 1rem; background: var(--surface-elevated); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 1.5rem;">
+          <p class="muted" style="margin-top: 0;">Scan this URI with your authenticator app (Google Authenticator, 1Password, etc.):</p>
+          <p style="margin-bottom: 0;"><code style="word-break: break-all; font-size: 0.775rem;">{{ pending_uri }}</code></p>
+        </div>
+
+        <form method="post" action="/account/mfa/enable">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <label for="code">Verification Code</label>
+          <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="000000">
+          <button type="submit" style="margin-top: 1.25rem;">ENABLE MFA</button>
+        </form>
+      {% else %}
+        <p class="muted">Two-factor authentication is not configured yet. Protect your identity with standard TOTP.</p>
+        <form method="post" action="/account/mfa/setup" style="margin-top: 1.25rem;">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <button type="submit">SET UP AUTHENTICATOR</button>
+        </form>
+      {% endif %}
+
+      {% if recovery_codes %}
+        <div style="margin-top: 1.75rem; padding-top: 1.25rem; border-top: 1px solid var(--border);">
+          <p class="ok">Store these recovery codes in a safe place. They will not be displayed again.</p>
+          <ul style="font-family: var(--font-mono); font-size: 0.85rem; columns: 2; margin: 0; padding-left: 1.25rem;">
+            {% for c in recovery_codes %}<li><code>{{ c }}</code></li>{% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<script>
+  function switchTab(name) {
+    var pTab = document.getElementById('tab-profile');
+    var sTab = document.getElementById('tab-security');
+    var pBtn = document.getElementById('tab-profile-btn');
+    var sBtn = document.getElementById('tab-security-btn');
+    if (!pTab || !sTab || !pBtn || !sBtn) return;
+
+    if (name === 'security') {
+      pTab.style.display = 'none';
+      sTab.style.display = 'block';
+      pBtn.classList.remove('active');
+      pBtn.setAttribute('aria-selected', 'false');
+      sBtn.classList.add('active');
+      sBtn.setAttribute('aria-selected', 'true');
+      history.replaceState(null, '', '?tab=security');
+    } else {
+      pTab.style.display = 'block';
+      sTab.style.display = 'none';
+      sBtn.classList.remove('active');
+      sBtn.setAttribute('aria-selected', 'false');
+      pBtn.classList.add('active');
+      pBtn.setAttribute('aria-selected', 'true');
+      history.replaceState(null, '', '?tab=profile');
+    }
+  }
+</script>
 {% endblock %}

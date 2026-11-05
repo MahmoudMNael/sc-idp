@@ -40,6 +40,7 @@ os.environ["IDP_ISSUER"] = "http://testserver"
 os.environ["COOKIE_SECURE"] = "false"
 os.environ["MAIL_BACKEND"] = "console"
 os.environ["RATE_LIMIT_REGISTER"] = "30"
+os.environ["RATE_LIMIT_LOGIN"] = "60"
 
 
 def pkce() -> tuple[str, str]:
@@ -1325,6 +1326,211 @@ def main() -> None:
         assert "Partner Studio" in linked_mails[-1]["html"]
         assert "openid email" in linked_mails[-1]["html"]
         assert "/logo-light.png" in linked_mails[-1]["html"]
+        # Test Register Confirm Password
+        mismatch_email = f"mismatch-{secrets.token_hex(4)}@example.test"
+        reg_page = c.get("/register")
+        assert "confirm_password" in reg_page.text
+        bad_confirm = c.post(
+            "/register",
+            data={
+                "first_name": "Mis",
+                "last_name": "Match",
+                "email": mismatch_email,
+                "password": "correct-horse-battery",
+                "confirm_password": "wrong-horse-battery",
+                "csrf_token": csrf_token(reg_page.text),
+            },
+            follow_redirects=False,
+        )
+        assert bad_confirm.status_code == 400
+        assert "passwords do not match" in bad_confirm.text.lower()
+
+        # Test Top Navigation user state when logged out vs logged in
+        c.get("/logout", follow_redirects=False)
+        logged_out_home = c.get("/")
+        assert "Sign in" in logged_out_home.text
+        assert 'id="userDropdown"' not in logged_out_home.text
+
+        # Sign in and check top nav has user dropdown and Account link
+        login_page = c.get("/login")
+        c.post(
+            "/login",
+            data={
+                "email": vip_email,
+                "password": password,
+                "csrf_token": csrf_token(login_page.text),
+            },
+            follow_redirects=False,
+        )
+        logged_in_home = c.get("/")
+        assert 'id="userDropdown"' in logged_in_home.text
+        assert "Account Settings" in logged_in_home.text
+        assert "Sign out" in logged_in_home.text
+
+        # Test Profile Patching: editing last name only preserves first name
+        acc_page = c.get("/account")
+        assert "PROFILE DETAILS" in acc_page.text
+        assert "CHANGE PASSWORD" in acc_page.text
+        patch_last = c.post(
+            "/account/profile",
+            data={
+                "last_name": "Bell",
+                "csrf_token": csrf_token(acc_page.text),
+            },
+            follow_redirects=False,
+        )
+        assert patch_last.status_code == 303
+        acc_view = c.get("/account")
+        assert 'value="Alexander"' in acc_view.text
+        assert 'value="Bell"' in acc_view.text
+
+        # Test JSON PATCH /account/profile
+        json_patch = c.patch(
+            "/account/profile",
+            json={"first_name": "Sir Alexander"},
+            headers={"x-csrf-token": csrf_token(acc_view.text)},
+        )
+        assert json_patch.status_code == 200
+        assert json_patch.json() == {"first_name": "Sir Alexander", "last_name": "Bell"}
+        acc_view2 = c.get("/account")
+        assert 'value="Sir Alexander"' in acc_view2.text
+        assert 'value="Bell"' in acc_view2.text
+
+        # Test Change Password
+        # 1. Invalid current password
+        bad_curr = c.post(
+            "/account/password",
+            data={
+                "current_password": "wrong-password",
+                "new_password": "brand-new-secure-password",
+                "confirm_password": "brand-new-secure-password",
+                "csrf_token": csrf_token(acc_view2.text),
+            },
+            follow_redirects=False,
+        )
+        assert bad_curr.status_code == 303
+        assert "Current+password+is+incorrect" in bad_curr.headers["location"]
+
+        # 2. Mismatched confirm password
+        bad_conf = c.post(
+            "/account/password",
+            data={
+                "current_password": password,
+                "new_password": "brand-new-secure-password",
+                "confirm_password": "different-new-password",
+                "csrf_token": csrf_token(acc_view2.text),
+            },
+            follow_redirects=False,
+        )
+        assert bad_conf.status_code == 303
+        assert "do+not+match" in bad_conf.headers["location"]
+
+        # 3. Test revocation of other sessions:
+        # Save first session cookie
+        first_cookie = c.cookies.get(settings.cookie_name)
+        assert first_cookie is not None
+
+        # Clear cookies and log in again to create a second active session
+        c.cookies.clear()
+        login_again = c.post(
+            "/login",
+            data={
+                "email": vip_email,
+                "password": password,
+                "csrf_token": csrf_token(c.get("/login").text),
+            },
+            follow_redirects=False,
+        )
+        assert login_again.status_code == 303
+        second_cookie = c.cookies.get(settings.cookie_name)
+        assert second_cookie is not None and second_cookie != first_cookie
+
+        # Now change password successfully using the second session
+        fresh_acc = c.get("/account")
+        new_vip_pass = "brand-new-secure-password"
+        pwd_success = c.post(
+            "/account/password",
+            data={
+                "current_password": password,
+                "new_password": new_vip_pass,
+                "confirm_password": new_vip_pass,
+                "csrf_token": csrf_token(fresh_acc.text),
+            },
+            follow_redirects=False,
+        )
+        assert pwd_success.status_code == 303
+        assert "Password+updated+successfully" in pwd_success.headers["location"]
+
+        # Current (second) session still works
+        assert c.get("/account").status_code == 200
+
+        # Prior (first) session was revoked by password change, so using it redirects to /login
+        c.cookies.clear()
+        c.cookies.set(settings.cookie_name, first_cookie, domain="testserver.local")
+        first_revoked = c.get("/account", follow_redirects=False)
+        assert first_revoked.status_code == 302
+        assert "/login" in first_revoked.headers["location"]
+
+        # Old password cannot log in
+        c.cookies.clear()
+        old_login = c.post(
+            "/login",
+            data={
+                "email": vip_email,
+                "password": password,
+                "csrf_token": csrf_token(c.get("/login").text),
+            },
+            follow_redirects=False,
+        )
+        assert old_login.status_code == 401
+
+        # New password logs in successfully
+        c.cookies.clear()
+        new_login_resp = c.post(
+            "/login",
+            data={
+                "email": vip_email,
+                "password": new_vip_pass,
+                "csrf_token": csrf_token(c.get("/login").text),
+            },
+            follow_redirects=False,
+        )
+        assert new_login_resp.status_code == 303
+        active_sess_cookie = c.cookies.get(settings.cookie_name)
+        assert active_sess_cookie is not None
+        assert c.get("/account").status_code == 200
+
+        # Test session revocation on password reset
+        forgot_req = c.post(
+            "/forgot-password",
+            data={"email": vip_email, "csrf_token": csrf_token(c.get("/forgot-password").text)},
+            follow_redirects=False,
+        )
+        assert forgot_req.status_code == 303
+        reset_otp_m = re.search(r"code is:\s*([0-9]{6})", sent_emails[-1]["body"])
+        assert reset_otp_m
+        reset_code = reset_otp_m.group(1)
+
+        verify_resp = c.post(
+            "/reset-password/verify",
+            data={"email": vip_email, "code": reset_code, "csrf_token": csrf_token(c.get(forgot_req.headers["location"]).text)},
+            follow_redirects=False,
+        )
+        assert verify_resp.status_code == 303
+        tkt = parse_qs(urlparse(verify_resp.headers["location"]).query)["ticket"][0]
+
+        final_pass = "brand-new-final-password"
+        reset_post = c.post(
+            "/reset-password",
+            data={"ticket": tkt, "password": final_pass, "csrf_token": csrf_token(c.get(verify_resp.headers["location"]).text)},
+            follow_redirects=False,
+        )
+        assert reset_post.status_code == 303
+
+        # Active session was revoked by password reset!
+        c.cookies.clear()
+        c.cookies.set(settings.cookie_name, active_sess_cookie, domain="testserver.local")
+        assert c.get("/account", follow_redirects=False).status_code == 302
 
     print("ok")
 

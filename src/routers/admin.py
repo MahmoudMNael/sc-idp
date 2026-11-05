@@ -250,6 +250,7 @@ async def admin_dashboard(
         settings,
         "admin_dashboard.html",
         current_user=admin_user,
+        is_admin=True,
         clients=clients,
     )
 
