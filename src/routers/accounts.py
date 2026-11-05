@@ -24,7 +24,7 @@ from src.core.crypto import (
 from src.core.deps import db_dep, ip_of, s_dep
 from src.core.settings import Settings
 from src.html import page
-from src.models import EmailToken, OAuthClient, User
+from src.models import AuthSession, EmailToken, OAuthClient, User
 from src.services.audit import audit
 from src.services.mail import (
     send_account_created_mail,
@@ -33,7 +33,7 @@ from src.services.mail import (
     send_otp_register_mail,
 )
 from src.services.ratelimit import allow, reset_rate_limit
-from src.services.roles import apply_preassigned_roles
+from src.services.roles import RoleName, apply_preassigned_roles, get_user_roles
 from src.services.sessions import clear_session_cookie, create_session, load_session, set_session_cookie
 
 router = APIRouter()
@@ -181,8 +181,19 @@ async def _rate(session, settings, kind: str, ip: str | None, limit: int) -> boo
 
 
 @router.get("/")
-async def home(request: Request, settings: Settings = s_dep):
-    return page(request, settings, "home.html")
+async def home(
+    request: Request,
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+):
+    sess = await load_session(session, settings, request.cookies.get(settings.cookie_name))
+    if sess:
+        user = await session.get(User, sess.user_id)
+        if user and user.is_active:
+            if user.totp_enabled and "otp" not in (sess.amr or []):
+                return RedirectResponse("/login/mfa", status_code=303)
+            return RedirectResponse("/account", status_code=303)
+    return RedirectResponse("/login", status_code=303)
 
 
 @router.get("/register")
@@ -216,6 +227,7 @@ async def register(
     last_name: str = Form(""),
     email: str = Form(""),
     password: str = Form(""),
+    confirm_password: str | None = Form(None),
     csrf_token: str = Form(""),
     next: str = Form(""),
 ):
@@ -252,6 +264,21 @@ async def register(
             client_name=client_name,
             cancel_url=cancel_url,
             error="First name and last name are required.",
+        )
+    if confirm_password is not None and confirm_password != password:
+        client_name, cancel_url = await oauth_context(session, settings, next)
+        return page(
+            request,
+            settings,
+            "register.html",
+            status=400,
+            first_name=first_name,
+            last_name=last_name,
+            email=email,
+            next=next,
+            client_name=client_name,
+            cancel_url=cancel_url,
+            error="Passwords do not match.",
         )
     email_n = email.strip().lower()
     if "@" not in email_n or len(password) < 8:
@@ -846,6 +873,18 @@ async def reset(
     user.password_hash = hash_password(settings, password)
     user.failed_login_count = 0
     user.locked_until = None
+
+    # Revoke all active sessions for this user on password reset
+    now = datetime.now(UTC)
+    await session.execute(
+        update(AuthSession)
+        .where(
+            AuthSession.user_id == user.id,
+            AuthSession.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
+
     await audit(session, "password_reset", user_id=user.id, ip=ip_of(request))
     query = {"message": "Password updated. Please sign in."}
     if next:

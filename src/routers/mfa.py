@@ -1,16 +1,28 @@
+from datetime import UTC, datetime
+from urllib.parse import urlencode
+
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pyotp import TOTP, random_base32
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.crypto import csrf_ok, decrypt_secret, encrypt_secret, hash_token, random_token
+from src.core.crypto import (
+    csrf_ok,
+    decrypt_secret,
+    encrypt_secret,
+    hash_password,
+    hash_token,
+    random_token,
+    verify_password,
+)
 from src.core.deps import db_dep, ip_of, s_dep
 from src.core.settings import Settings
 from src.html import page
-from src.models import MfaRecoveryCode, User
+from src.models import AuthSession, MfaRecoveryCode, User
 from src.routers.accounts import after_login_target, oauth_context
 from src.services.audit import audit
+from src.services.roles import RoleName, get_user_roles
 from src.services.sessions import create_session, load_session, set_session_cookie
 
 router = APIRouter()
@@ -46,8 +58,6 @@ async def _check_otp_or_recovery(session, settings, user: User, code: str) -> bo
     ).scalar_one_or_none()
     if row is None:
         return False
-    from datetime import UTC, datetime
-
     row.used_at = datetime.now(UTC)
     return True
 
@@ -97,10 +107,20 @@ async def mfa_submit(
 
 @router.get("/account")
 @router.get("/account/mfa")
-async def account_mfa(request: Request, session: AsyncSession = db_dep, settings: Settings = s_dep):
+async def account_mfa(
+    request: Request,
+    tab: str = "profile",
+    message: str | None = None,
+    error: str | None = None,
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+):
     sess, user = await _user_session(request, session, settings)
     if sess is None or user is None:
         return RedirectResponse("/login", status_code=302)
+    user_roles = await get_user_roles(session, user.id)
+    is_admin = RoleName.ADMIN in user_roles
+
     pending_uri = None
     if user.totp_secret_enc and not user.totp_enabled:
         secret = decrypt_secret(settings.key_encryption_key, user.totp_secret_enc)
@@ -109,6 +129,8 @@ async def account_mfa(request: Request, session: AsyncSession = db_dep, settings
         request,
         settings,
         "account.html",
+        current_user=user,
+        is_admin=is_admin,
         first_name=user.first_name or "",
         last_name=user.last_name or "",
         email=user.email,
@@ -116,27 +138,127 @@ async def account_mfa(request: Request, session: AsyncSession = db_dep, settings
         totp_enabled=user.totp_enabled,
         pending_uri=pending_uri,
         recovery_codes=None,
+        tab=tab,
+        message=message,
+        error=error,
     )
 
 
 @router.post("/account/profile")
+@router.patch("/account/profile")
 async def account_profile(
     request: Request,
     session: AsyncSession = db_dep,
     settings: Settings = s_dep,
-    first_name: str = Form(""),
-    last_name: str = Form(""),
-    csrf_token: str = Form(""),
+    first_name: str | None = Form(None),
+    last_name: str | None = Form(None),
+    csrf_token: str | None = Form(None),
 ):
-    if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
-        return page(request, settings, "error.html", status=400, error="Invalid or expired form token.")
+    content_type = request.headers.get("content-type", "")
+    is_json = "application/json" in content_type
+    if is_json:
+        data = await request.json()
+        first_name = data.get("first_name")
+        last_name = data.get("last_name")
+        csrf_token = request.headers.get("x-csrf-token") or request.cookies.get("csrf")
+    else:
+        if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
+            return page(request, settings, "error.html", status=400, error="Invalid or expired form token.")
+
     sess, user = await _user_session(request, session, settings)
     if sess is None or user is None:
+        if is_json:
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
         return RedirectResponse("/login", status_code=303)
-    user.first_name = first_name.strip() or None
-    user.last_name = last_name.strip() or None
+
+    if first_name is not None:
+        user.first_name = first_name.strip() or None
+    if last_name is not None:
+        user.last_name = last_name.strip() or None
+
     await audit(session, "profile_updated", user_id=user.id, ip=ip_of(request))
-    return RedirectResponse("/account/mfa", status_code=303)
+
+    if is_json:
+        return {"first_name": user.first_name, "last_name": user.last_name}
+    return RedirectResponse(f"/account?{urlencode({'tab': 'profile', 'message': 'Profile updated successfully.'})}", status_code=303)
+
+
+@router.post("/account/password")
+@router.patch("/account/password")
+async def account_password(
+    request: Request,
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+    current_password: str = Form(""),
+    new_password: str = Form(""),
+    confirm_password: str = Form(""),
+    csrf_token: str | None = Form(None),
+):
+    content_type = request.headers.get("content-type", "")
+    is_json = "application/json" in content_type
+    if is_json:
+        data = await request.json()
+        current_password = data.get("current_password", "")
+        new_password = data.get("new_password", "")
+        confirm_password = data.get("confirm_password", "")
+        csrf_token = request.headers.get("x-csrf-token") or request.cookies.get("csrf")
+    else:
+        if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
+            return page(request, settings, "error.html", status=400, error="Invalid or expired form token.")
+
+    sess, user = await _user_session(request, session, settings)
+    if sess is None or user is None:
+        if is_json:
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        return RedirectResponse("/login", status_code=303)
+
+    if not current_password or not new_password or not confirm_password:
+        msg = "All password fields are required."
+        if is_json:
+            return JSONResponse({"error": msg}, status_code=400)
+        return RedirectResponse(f"/account?{urlencode({'tab': 'security', 'error': msg})}", status_code=303)
+
+    ok, _ = verify_password(settings, user.password_hash, current_password)
+    if not ok:
+        msg = "Current password is incorrect."
+        if is_json:
+            return JSONResponse({"error": msg}, status_code=400)
+        return RedirectResponse(f"/account?{urlencode({'tab': 'security', 'error': msg})}", status_code=303)
+
+    if len(new_password) < 8:
+        msg = "New password must be at least 8 characters."
+        if is_json:
+            return JSONResponse({"error": msg}, status_code=400)
+        return RedirectResponse(f"/account?{urlencode({'tab': 'security', 'error': msg})}", status_code=303)
+
+    if new_password != confirm_password:
+        msg = "New password and confirmation do not match."
+        if is_json:
+            return JSONResponse({"error": msg}, status_code=400)
+        return RedirectResponse(f"/account?{urlencode({'tab': 'security', 'error': msg})}", status_code=303)
+
+    user.password_hash = hash_password(settings, new_password)
+    user.failed_login_count = 0
+    user.locked_until = None
+
+    # Revoke all other active sessions for this user
+    now = datetime.now(UTC)
+    await session.execute(
+        update(AuthSession)
+        .where(
+            AuthSession.user_id == user.id,
+            AuthSession.id != sess.id,
+            AuthSession.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
+
+    await audit(session, "password_changed", user_id=user.id, ip=ip_of(request))
+
+    if is_json:
+        return {"ok": True, "message": "Password updated successfully."}
+    return RedirectResponse(f"/account?{urlencode({'tab': 'security', 'message': 'Password updated successfully.'})}", status_code=303)
+
 
 
 
