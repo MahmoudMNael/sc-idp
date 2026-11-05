@@ -71,39 +71,79 @@ def main() -> None:
     from src.core.settings import get_settings
     from src.services.tokens import mint_idp_jwt
 
+    os.environ["MAIL_BACKEND"] = "console"
     get_settings.cache_clear()
     settings = get_settings()
+    assert settings.mail_backend == "console", "Email service must be in console mode for tests"
 
-    async def reset_db() -> None:
-        engine = create_async_engine(settings.sqlalchemy_url)
+    from sqlalchemy.pool import NullPool
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    import src.core.db as db_mod
+    from src.core.deps import get_db
+
+    async def ensure_schema() -> None:
+        engine = create_async_engine(settings.sqlalchemy_url, poolclass=NullPool)
         async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
             await conn.run_sync(Base.metadata.create_all)
         await engine.dispose()
 
-    asyncio.run(reset_db())
+    asyncio.run(ensure_schema())
 
-    async def age_tokens(user_email: str, seconds: int = 40) -> None:
-        from datetime import UTC, datetime, timedelta
-        from sqlalchemy import select, update
-        from src.models import EmailToken, User
-        engine = create_async_engine(settings.sqlalchemy_url)
-        async with engine.begin() as conn:
-            await conn.execute(
-                update(EmailToken)
-                .where(EmailToken.user_id == (
-                    select(User.id).where(User.email == user_email).scalar_subquery()
-                ))
-                .values(created_at=datetime.now(UTC) - timedelta(seconds=seconds))
-            )
-        await engine.dispose()
-
+    engine = create_async_engine(settings.sqlalchemy_url, poolclass=NullPool)
     from src.main import app
 
     email = f"user-{secrets.token_hex(4)}@example.test"
     password = "correct-horse-battery"
 
-    with TestClient(app, base_url="http://testserver") as c:
+    from contextlib import contextmanager
+
+    @contextmanager
+    def db_transaction_rollback(client, engine, settings):
+        async def setup_tx():
+            conn = await engine.connect()
+            trans = await conn.begin()
+            sm = async_sessionmaker(bind=conn, expire_on_commit=False, join_transaction_mode="create_savepoint")
+
+            async def override_get_db():
+                async with sm() as s:
+                    yield s
+                    await s.commit()
+
+            app.dependency_overrides[get_db] = override_get_db
+            db_mod.SessionLocal = sm
+            async with sm() as s:
+                from src.core.keys import ensure_active_key
+                from src.services.bootstrap import bootstrap_demo_clients
+                await ensure_active_key(s, settings)
+                await bootstrap_demo_clients(s, settings)
+                await s.commit()
+            return conn, trans, sm
+
+        conn, trans, sm = client.portal.call(setup_tx)
+        try:
+            yield sm
+        finally:
+            async def teardown_tx():
+                await trans.rollback()
+                await conn.close()
+            client.portal.call(teardown_tx)
+            app.dependency_overrides.pop(get_db, None)
+
+    with TestClient(app, base_url="http://testserver") as c, db_transaction_rollback(c, engine, settings) as sm:
+        async def age_tokens(user_email: str, seconds: int = 40) -> None:
+            from datetime import UTC, datetime, timedelta
+            from sqlalchemy import select, update
+            from src.models import EmailToken, User
+            async with sm() as s:
+                await s.execute(
+                    update(EmailToken)
+                    .where(EmailToken.user_id == (
+                        select(User.id).where(User.email == user_email).scalar_subquery()
+                    ))
+                    .values(created_at=datetime.now(UTC) - timedelta(seconds=seconds))
+                )
+                await s.commit()
+
         h = c.get("/healthz")
         assert h.status_code == 200, h.text
 
@@ -600,7 +640,7 @@ def main() -> None:
         assert "Please wait" in early_reset_resend.text
 
         # age tokens to simulate cooldown expiring
-        asyncio.run(age_tokens(email, 40))
+        c.portal.call(age_tokens, email, 40)
 
         good_reset_resend = c.post(
             "/reset-password/resend",
@@ -681,7 +721,7 @@ def main() -> None:
         assert "Please wait" in early_resend.text
 
         # age tokens to simulate cooldown expiring
-        asyncio.run(age_tokens(email2, 40))
+        c.portal.call(age_tokens, email2, 40)
 
         # test resend after cooldown expires
         resend_resp = c.post(
@@ -1288,6 +1328,9 @@ def main() -> None:
 
     print("ok")
 
+
+def test_flow() -> None:
+    main()
 
 
 if __name__ == "__main__":
