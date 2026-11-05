@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.crypto import (
@@ -32,7 +32,7 @@ from src.services.mail import (
     send_otp_forgot_password_mail,
     send_otp_register_mail,
 )
-from src.services.ratelimit import allow
+from src.services.ratelimit import allow, reset_rate_limit
 from src.services.roles import apply_preassigned_roles
 from src.services.sessions import clear_session_cookie, create_session, load_session, set_session_cookie
 
@@ -74,6 +74,25 @@ def after_login_target(settings: Settings, nxt: str | None) -> str:
 
 def _csrf_fail(request, settings):
     return page(request, settings, "error.html", status=400, error="Invalid or expired form token.")
+
+
+async def _invalidate_prior_tokens(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    purpose: str,
+) -> None:
+    # ponytail: mark prior unconsumed tokens for (user, purpose) as consumed on new code issuance
+    await session.execute(
+        update(EmailToken)
+        .where(
+            EmailToken.user_id == user_id,
+            EmailToken.purpose == purpose,
+            EmailToken.consumed_at.is_(None),
+        )
+        .values(consumed_at=datetime.now(UTC))
+    )
+    key_prefix = "pwd_otp_attempt" if purpose == "reset_password" else "otp_attempt"
+    await reset_rate_limit(session, f"{key_prefix}:{user_id}")
 
 
 async def _get_resend_cooldown(
@@ -250,8 +269,27 @@ async def register(
             cancel_url=cancel_url,
             error="Valid email and password (8+ characters) required.",
         )
-    exists = (await session.execute(select(User.id).where(User.email == email_n))).scalar_one_or_none()
-    if exists:
+    existing_user = (await session.execute(select(User).where(User.email == email_n))).scalar_one_or_none()
+    if existing_user:
+        if not existing_user.email_verified:
+            existing_user.password_hash = hash_password(settings, password)
+            existing_user.first_name = first_name_clean
+            existing_user.last_name = last_name_clean
+            await _invalidate_prior_tokens(session, existing_user.id, "verify_email")
+            code = generate_otp(6)
+            session.add(
+                EmailToken(
+                    token_hash=hash_otp(settings.token_hash_pepper, existing_user.id, "verify_email", code),
+                    user_id=existing_user.id,
+                    purpose="verify_email",
+                    expires_at=datetime.now(UTC) + timedelta(seconds=settings.otp_ttl),
+                )
+            )
+            send_otp_register_mail(settings, email_n, code)
+            query = {"email": email_n}
+            if next:
+                query["next"] = next
+            return RedirectResponse(f"/verify-email?{urlencode(query)}", status_code=303)
         client_name, cancel_url = await oauth_context(session, settings, next)
         return page(
             request,
@@ -401,6 +439,7 @@ async def verify_email_resend(
                 status=429,
                 error="Too many resend attempts. Please wait a few minutes.",
             )
+        await _invalidate_prior_tokens(session, user.id, "verify_email")
         code = generate_otp(6)
         session.add(
             EmailToken(
@@ -623,6 +662,7 @@ async def forgot(
     user = (await session.execute(select(User).where(User.email == email_n))).scalar_one_or_none()
     if user and user.is_active:
         if await allow(session, f"pwd_otp_send:{user.id}", 3, 600):
+            await _invalidate_prior_tokens(session, user.id, "reset_password")
             code = generate_otp(6)
             session.add(
                 EmailToken(
@@ -734,6 +774,7 @@ async def reset_resend(
                 status=429,
                 error="Too many resend attempts. Please wait a few minutes.",
             )
+        await _invalidate_prior_tokens(session, user.id, "reset_password")
         code = generate_otp(6)
         session.add(
             EmailToken(

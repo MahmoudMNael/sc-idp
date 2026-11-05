@@ -379,10 +379,56 @@
       .sc-grid-2 {
         grid-template-columns: 1fr 1fr;
       }
+    .password-wrapper {
+      position: relative;
+      width: 100%;
+    }
+    .password-wrapper input {
+      padding-right: 2.75rem;
+    }
+    .password-toggle-btn {
+      position: absolute;
+      right: 0.5rem;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      padding: 0.4rem;
+      height: auto;
+      cursor: pointer;
+      color: var(--text-muted);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 150ms ease;
+    }
+    .password-toggle-btn:hover {
+      background: none;
+      color: var(--text);
+    }
+    .password-toggle-btn svg {
+      width: 18px;
+      height: 18px;
+      display: block;
     }
   </style>
 </head>
 <body>
+  <script>
+    function togglePassword(btn) {
+      var input = btn.previousElementSibling;
+      if (!input) return;
+      var isPass = input.type === 'password';
+      input.type = isPass ? 'text' : 'password';
+      btn.setAttribute('aria-label', isPass ? 'Hide password' : 'Show password');
+      var eyeOpen = btn.querySelector('.eye-open');
+      var eyeClosed = btn.querySelector('.eye-closed');
+      if (eyeOpen && eyeClosed) {
+        eyeOpen.style.display = isPass ? 'none' : 'block';
+        eyeClosed.style.display = isPass ? 'block' : 'none';
+      }
+    }
+  </script>
   {% block header %}
   <header class="sc-header">
     <div class="sc-header-inner">

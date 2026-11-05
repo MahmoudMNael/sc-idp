@@ -47,12 +47,14 @@ def send_mail(
 def send_otp_register_mail(settings: Settings, to: str, code: str) -> None:
     base_url = settings.idp_issuer.rstrip("/")
     subject = "Verify your email"
-    body = f"Your verification code is: {code}\nThis code expires in 10 minutes."
+    ttl_minutes = max(1, settings.otp_ttl // 60)
+    body = f"Your verification code is: {code}\nThis code expires in {ttl_minutes} minutes."
     html = render_mail_template(
         "mail/otp_register.html",
         base_url=base_url,
         to=to,
         code=code,
+        ttl_minutes=ttl_minutes,
     )
     send_mail(settings, to, subject, body, html=html)
 
@@ -60,12 +62,14 @@ def send_otp_register_mail(settings: Settings, to: str, code: str) -> None:
 def send_otp_forgot_password_mail(settings: Settings, to: str, code: str) -> None:
     base_url = settings.idp_issuer.rstrip("/")
     subject = "Reset your password"
-    body = f"Your password reset code is: {code}\nThis code expires in 10 minutes."
+    ttl_minutes = max(1, settings.otp_ttl // 60)
+    body = f"Your password reset code is: {code}\nThis code expires in {ttl_minutes} minutes."
     html = render_mail_template(
         "mail/otp_forgot_password.html",
         base_url=base_url,
         to=to,
         code=code,
+        ttl_minutes=ttl_minutes,
     )
     send_mail(settings, to, subject, body, html=html)
 

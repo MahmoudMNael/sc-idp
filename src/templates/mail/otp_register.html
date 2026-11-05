@@ -16,7 +16,7 @@
         {{ code }}
       </div>
       <div style="margin-top: 8px; font-size: 12px; font-weight: 500; color: #6B7280; text-transform: uppercase; letter-spacing: 0.05em;">
-        Expires in 10 minutes
+        Expires in {{ ttl_minutes or 5 }} minutes
       </div>
     </td>
   </tr>
