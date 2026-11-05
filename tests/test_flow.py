@@ -39,6 +39,7 @@ for name in ("SECRET_KEY", "TOKEN_HASH_PEPPER", "KEY_ENCRYPTION_KEY", "IDP_ADMIN
 os.environ["IDP_ISSUER"] = "http://testserver"
 os.environ["COOKIE_SECURE"] = "false"
 os.environ["MAIL_BACKEND"] = "console"
+os.environ["RATE_LIMIT_REGISTER"] = "30"
 
 
 def pkce() -> tuple[str, str]:
@@ -212,6 +213,9 @@ def main() -> None:
         authorize_mod.send_mail = fake_send_mail
 
         reg = c.get("/register")
+        assert "password-toggle-btn" in reg.text
+        assert 'aria-label="Show password"' in reg.text
+
         bad_reg = c.post(
             "/register",
             data={"email": email, "password": password, "csrf_token": csrf_token(reg.text)},
@@ -234,10 +238,13 @@ def main() -> None:
         assert r.status_code == 303, r.text
         assert "/verify-email" in r.headers["location"]
 
-        # unverified user blocked at login
+        # unverified user blocked at login; verify login page also has password toggle
+        login_get = c.get("/login")
+        assert "password-toggle-btn" in login_get.text
+
         bad_login = c.post(
             "/login",
-            data={"email": email, "password": password, "csrf_token": csrf_token(c.get("/login").text)},
+            data={"email": email, "password": password, "csrf_token": csrf_token(login_get.text)},
             follow_redirects=False,
         )
         assert bad_login.status_code == 403, bad_login.text
@@ -248,9 +255,11 @@ def main() -> None:
         reg_mail = [m for m in sent_emails if m["subject"] == "Verify your email"][-1]
         otp_m = re.search(r"code is:\s*([0-9]{6})", reg_mail["body"])
         assert otp_m, reg_mail["body"]
+        assert "expires in 5 minutes" in reg_mail["body"].lower()
         assert reg_mail.get("html"), "HTML body missing in register OTP"
         assert "/logo-light.png" in reg_mail["html"]
         assert "Verify your email" in reg_mail["html"]
+        assert "Expires in 5 minutes" in reg_mail["html"]
         otp = otp_m.group(1)
 
         # wrong OTP
@@ -275,6 +284,21 @@ def main() -> None:
         assert welcome_mails[-1].get("html"), "HTML body missing in account created email"
         assert "Welcome to Short Circuit" in welcome_mails[-1]["html"]
         assert "/logo-light.png" in welcome_mails[-1]["html"]
+
+        # duplicate registration for already verified user returns 400
+        dup_verified = c.post(
+            "/register",
+            data={
+                "first_name": "Test",
+                "last_name": "User",
+                "email": email,
+                "password": password,
+                "csrf_token": csrf_token(c.get("/register").text),
+            },
+            follow_redirects=False,
+        )
+        assert dup_verified.status_code == 400
+        assert "Could not create that account" in dup_verified.text
         c.get("/logout", follow_redirects=False)
 
         def login_and_code(
@@ -555,8 +579,10 @@ def main() -> None:
         reset_mail = [m for m in sent_emails if m["subject"] == "Reset your password"][-1]
         reset_m = re.search(r"code is:\s*([0-9]{6})", reset_mail["body"])
         assert reset_m, reset_mail["body"]
+        assert "expires in 5 minutes" in reset_mail["body"].lower()
         assert reset_mail.get("html"), "HTML body missing in password reset email"
         assert "Reset your password" in reset_mail["html"]
+        assert "Expires in 5 minutes" in reset_mail["html"]
         assert "/logo-light.png" in reset_mail["html"]
         reset_otp = reset_m.group(1)
 
@@ -607,6 +633,7 @@ def main() -> None:
 
         # step 2: set new password
         reset_page = c.get(good_reset_otp.headers["location"])
+        assert "password-toggle-btn" in reset_page.text
         new_password = "new-correct-horse-battery"
         reset_done = c.post(
             "/reset-password",
@@ -639,6 +666,7 @@ def main() -> None:
             follow_redirects=False,
         )
         assert r2.status_code == 303
+        otp2_first = re.search(r"code is:\s*([0-9]{6})", sent_emails[-1]["body"]).group(1)
         v2_page = c.get(r2.headers["location"])
         assert "disabled" in v2_page.text
         assert "Resend code in " in v2_page.text
@@ -667,9 +695,18 @@ def main() -> None:
         assert otp2_m
         otp2 = otp2_m.group(1)
 
+        # previous OTP code for email2 is now invalidated
+        bad_prev_otp = c.post(
+            "/verify-email",
+            data={"email": email2, "code": otp2_first, "csrf_token": csrf_token(resend_resp.text)},
+            follow_redirects=False,
+        )
+        assert bad_prev_otp.status_code == 400
+        assert "Invalid or expired" in bad_prev_otp.text
+
         # test max attempts (settings.otp_max_attempts invalid tries allowed, next triggers 429)
-        curr_page = resend_resp
-        for _ in range(settings.otp_max_attempts):
+        curr_page = bad_prev_otp
+        for _ in range(settings.otp_max_attempts - 1):
             curr_page = c.post(
                 "/verify-email",
                 data={"email": email2, "code": "000000", "csrf_token": csrf_token(curr_page.text)},
@@ -694,6 +731,42 @@ def main() -> None:
         )
         assert replay_resp.status_code == 400
         assert "Invalid or expired" in replay_resp.text
+
+        # Test registering again with pending unverified email2 redirects to /verify-email and issues a new code
+        r2_rereg = c.post(
+            "/register",
+            data={
+                "first_name": "User",
+                "last_name": "Two",
+                "email": email2,
+                "password": password,
+                "csrf_token": csrf_token(c.get("/register").text),
+            },
+            follow_redirects=False,
+        )
+        assert r2_rereg.status_code == 303
+        assert "/verify-email" in r2_rereg.headers["location"]
+        otp2_rereg_m = re.search(r"code is:\s*([0-9]{6})", sent_emails[-1]["body"])
+        assert otp2_rereg_m
+        otp2_rereg = otp2_rereg_m.group(1)
+        assert otp2 != otp2_rereg
+
+        # previous otp2 is now invalidated
+        bad_rereg_otp = c.post(
+            "/verify-email",
+            data={"email": email2, "code": otp2, "csrf_token": csrf_token(c.get("/verify-email").text)},
+            follow_redirects=False,
+        )
+        assert bad_rereg_otp.status_code == 400
+        assert "Invalid or expired" in bad_rereg_otp.text
+
+        # new otp2_rereg succeeds (and attempt limit was reset on new OTP issuance)
+        good_rereg_otp = c.post(
+            "/verify-email",
+            data={"email": email2, "code": otp2_rereg, "csrf_token": csrf_token(bad_rereg_otp.text)},
+            follow_redirects=False,
+        )
+        assert good_rereg_otp.status_code == 303
 
         # -------------------------------------------------------------
         # IdP Roles Foundation Tests

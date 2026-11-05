@@ -22,3 +22,10 @@ async def allow(session: AsyncSession, key: str, limit: int, window: int) -> boo
     )
     count = result.scalar_one()
     return int(count) <= limit
+
+
+async def reset_rate_limit(session: AsyncSession, key: str) -> None:
+    await session.execute(
+        text("DELETE FROM rate_limits WHERE key = :key"),
+        {"key": key},
+    )
