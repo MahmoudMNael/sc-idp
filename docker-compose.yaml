@@ -30,6 +30,11 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - ./assets:/app/assets
+      - ./migrations:/app/migrations
+      - ./tests:/app/tests
     develop:
       watch:
         - action: sync

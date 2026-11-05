@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -50,6 +51,13 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = ""
     mail_base_url: str = ""
+
+    @field_validator("smtp_port", mode="before")
+    @classmethod
+    def _parse_smtp_port(cls, v):
+        if v == "" or v is None:
+            return 587
+        return int(v)
 
     product_a_client_id: str = ""
     product_a_client_secret: str = ""
