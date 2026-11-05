@@ -187,12 +187,13 @@ async def home(
     settings: Settings = s_dep,
 ):
     sess = await load_session(session, settings, request.cookies.get(settings.cookie_name))
-    user = await session.get(User, sess.user_id) if sess else None
-    is_admin = False
-    if user:
-        roles = await get_user_roles(session, user.id)
-        is_admin = RoleName.ADMIN in roles
-    return page(request, settings, "home.html", current_user=user, is_admin=is_admin)
+    if sess:
+        user = await session.get(User, sess.user_id)
+        if user and user.is_active:
+            if user.totp_enabled and "otp" not in (sess.amr or []):
+                return RedirectResponse("/login/mfa", status_code=303)
+            return RedirectResponse("/account", status_code=303)
+    return RedirectResponse("/login", status_code=303)
 
 
 @router.get("/register")

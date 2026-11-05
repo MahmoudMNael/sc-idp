@@ -1345,13 +1345,18 @@ def main() -> None:
         assert bad_confirm.status_code == 400
         assert "passwords do not match" in bad_confirm.text.lower()
 
-        # Test Top Navigation user state when logged out vs logged in
+        # Test Top Navigation user state and home redirection when logged out vs logged in
         c.get("/logout", follow_redirects=False)
+        logged_out_red = c.get("/", follow_redirects=False)
+        assert logged_out_red.status_code == 303
+        assert "/login" in logged_out_red.headers["location"]
+
         logged_out_home = c.get("/")
         assert "Sign in" in logged_out_home.text
         assert 'id="userDropdown"' not in logged_out_home.text
+        assert ">Home<" not in logged_out_home.text
 
-        # Sign in and check top nav has user dropdown and Account link
+        # Sign in and check home redirects to /account, top nav has user dropdown, no Home link
         login_page = c.get("/login")
         c.post(
             "/login",
@@ -1362,10 +1367,15 @@ def main() -> None:
             },
             follow_redirects=False,
         )
+        logged_in_red = c.get("/", follow_redirects=False)
+        assert logged_in_red.status_code == 303
+        assert "/account" in logged_in_red.headers["location"]
+
         logged_in_home = c.get("/")
         assert 'id="userDropdown"' in logged_in_home.text
         assert "Account Settings" in logged_in_home.text
         assert "Sign out" in logged_in_home.text
+        assert ">Home<" not in logged_in_home.text
 
         # Test Profile Patching: editing last name only preserves first name
         acc_page = c.get("/account")
