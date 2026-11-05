@@ -18,9 +18,25 @@ Central OpenID Connect provider: **who the user is**. Products decide **what the
 
 ---
 
-## Install
+## Run with Docker (Recommended)
 
-Python 3.12+ and a running Postgres 14+ (the app does not start a database).
+Start the app and MySQL with Docker Compose Watch:
+
+```bash
+docker compose up --watch
+# or in background:
+# docker compose up -d && docker compose watch
+```
+
+- Automatic migrations run on startup once MySQL is healthy.
+- Docker watch syncs code edits in `./src`, `./assets`, and `./migrations` instantly into the container with hot reloading.
+- MySQL 8.4 is available on port `3306`.
+
+---
+
+## Local Development (Without Docker)
+
+Python 3.12+ and a running MySQL 8+ instance:
 
 ```bash
 cd sc-idp
@@ -29,15 +45,13 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-Installs this package and every pinned dependency from `pyproject.toml` (FastAPI, uvicorn, SQLAlchemy, psycopg, Alembic, and cryptography dependencies).
-
 Copy `.env.example` to `.env` and fill the variables:
 
 ```bash
 cp .env.example .env
 ```
 
-`DATABASE_URL` must point at your Postgres. `IDP_ISSUER` is the origin the browser uses to reach this IdP (scheme + host + port, no trailing slash). For local HTTP development set `COOKIE_SECURE=false`.
+`DATABASE_URL` must point at your MySQL instance (`mysql+asyncmy://...`). `IDP_ISSUER` is the origin the browser uses to reach this IdP (scheme + host + port, no trailing slash). For local HTTP development set `COOKIE_SECURE=false`.
 
 Apply database migrations:
 
@@ -66,11 +80,12 @@ uvicorn src.main:app --reload --host 127.0.0.1 --port 8000
 
 ## Tests
 
-Postgres must be up and `DATABASE_URL` set (from `.env` or the environment):
+MySQL must be up and `DATABASE_URL` set (from `.env` or the environment):
 
 ```bash
-source .venv/bin/activate
-python tests/test_flow.py
+docker compose exec web python tests/test_flow.py
+# or locally:
+# python tests/test_flow.py
 ```
 
 This end-to-end integration suite drops and recreates tables in that database. **Do not point it at production.**

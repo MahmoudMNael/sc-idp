@@ -11,7 +11,8 @@ dependencies = [
     "fastapi==0.141.1",
     "uvicorn[standard]==0.52.4",
     "sqlalchemy[asyncio]==2.0.52",
-    "psycopg[binary,pool]==3.3.5",
+    "asyncmy>=0.2.10",
+    "pymysql>=1.1.1",
     "alembic==1.19.2",
     "pydantic-settings==2.15.0",
     "argon2-cffi==25.1.0",
@@ -22,8 +23,7 @@ dependencies = [
     "python-multipart==0.0.32",
     "itsdangerous==2.2.0",
     "httpx==0.28.1",
-    "Authlib==1.8.0",
-    "asyncpg[binary]"
+    "Authlib==1.8.0"
 ]
 
 [tool.setuptools.packages.find]

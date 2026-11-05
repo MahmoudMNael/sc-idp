@@ -27,6 +27,8 @@ def sqlalchemy_url() -> str:
     url = os.environ.get("DATABASE_URL") or ""
     if not url:
         raise RuntimeError("DATABASE_URL is required for migrations")
+    if url.startswith("mysql://"):
+        return "mysql+asyncmy://" + url.removeprefix("mysql://")
     if url.startswith("postgresql://"):
         return "postgresql+psycopg://" + url.removeprefix("postgresql://")
     return url

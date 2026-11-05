@@ -63,6 +63,8 @@ class Settings(BaseSettings):
     @property
     def sqlalchemy_url(self) -> str:
         url = self.database_url
+        if url.startswith("mysql://"):
+            return "mysql+asyncmy://" + url.removeprefix("mysql://")
         if url.startswith("postgresql://"):
             return "postgresql+psycopg://" + url.removeprefix("postgresql://")
         return url
