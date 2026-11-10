@@ -1,0 +1,241 @@
+{% extends "base.html" %}
+{% block title %}Users — Admin Dashboard | Short Circuit IdP{% endblock %}
+
+{% block nav %}
+  <a href="/admin/dashboard">OAuth Clients</a>
+  <a href="/admin/dashboard/users" class="active">Users</a>
+  {{ super() }}
+{% endblock %}
+
+{% block main_class %}container-xl{% endblock %}
+
+{% block body %}
+<div style="margin-bottom: 2rem;">
+  <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em; color: var(--accent); text-transform: uppercase; margin-bottom: 0.4rem; font-weight: 600;">IDP ADMINISTRATION</div>
+  <h1>USER ACCOUNTS</h1>
+  <p class="muted" style="margin-top: -0.5rem; margin-bottom: 1.5rem; max-width: 760px;">
+    View registered users, identities, and assigned roles. Administrative password reset is permitted for accounts with the <code>sc_member</code> role.
+  </p>
+</div>
+
+{% if flash_message %}
+  <div class="ok">{{ flash_message }}</div>
+{% endif %}
+
+{% if flash_error %}
+  <div class="error">{{ flash_error }}</div>
+{% endif %}
+
+<!-- Metrics Overview -->
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.25rem; margin-bottom: 2rem;">
+  <div class="sc-card" style="padding: 1.25rem; margin-bottom: 0;">
+    <div style="font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.08em;">Total Users</div>
+    <div style="font-family: var(--font-display); font-size: 2.25rem; color: var(--text); margin-top: 0.25rem;">{{ users|length }}</div>
+  </div>
+  <div class="sc-card" style="padding: 1.25rem; margin-bottom: 0;">
+    <div style="font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.08em;">Active Users</div>
+    <div style="font-family: var(--font-display); font-size: 2.25rem; color: var(--success); margin-top: 0.25rem;">
+      {{ users|selectattr("is_active")|list|length }}
+    </div>
+  </div>
+  <div class="sc-card" style="padding: 1.25rem; margin-bottom: 0;">
+    <div style="font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.08em;">SC Members</div>
+    <div style="font-family: var(--font-display); font-size: 2.25rem; color: var(--accent); margin-top: 0.25rem;">
+      {{ sc_member_count }}
+    </div>
+  </div>
+</div>
+
+<!-- Registered Users List Card -->
+<div class="sc-card">
+  <h2>REGISTERED USERS</h2>
+  <p class="muted" style="margin-top: -0.5rem; margin-bottom: 1.5rem;">
+    All identity accounts provisioned in Short Circuit IdP.
+  </p>
+
+  {% if users %}
+  <div style="overflow-x: auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>User</th>
+          <th>User ID</th>
+          <th>Roles</th>
+          <th>Status</th>
+          <th>Joined</th>
+          <th style="text-align: right;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        {% set roles = user_roles_map.get(u.id, []) %}
+        {% set is_sc_member = 'sc_member' in roles %}
+        <tr>
+          <td>
+            <div style="font-weight: 600; color: var(--text);">
+              {% if u.first_name or u.last_name %}
+                {{ u.first_name|default('', true) }} {{ u.last_name|default('', true) }}
+              {% else %}
+                <span class="muted">(No name set)</span>
+              {% endif %}
+            </div>
+            <div class="muted" style="font-size: 0.8rem; font-family: var(--font-mono);">{{ u.email }}</div>
+          </td>
+          <td>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <code style="font-size: 0.775rem;">{{ u.id }}</code>
+              <button type="button" class="btn sm secondary" style="padding: 0.2rem 0.45rem; font-size: 0.675rem;" onclick="navigator.clipboard.writeText('{{ u.id }}'); this.innerText='COPIED'; setTimeout(() => this.innerText='COPY', 1500);">COPY</button>
+            </div>
+          </td>
+          <td>
+            <div style="display: flex; flex-wrap: wrap; gap: 0.25rem;">
+              {% if roles %}
+                {% for r in roles %}
+                  {% if r == 'admin' %}
+                    <span class="badge badge-accent">{{ r }}</span>
+                  {% elif r == 'sc_member' %}
+                    <span class="badge badge-success">{{ r }}</span>
+                  {% else %}
+                    <span class="badge badge-muted">{{ r }}</span>
+                  {% endif %}
+                {% endfor %}
+              {% else %}
+                <span class="muted" style="font-size: 0.75rem;">(no roles)</span>
+              {% endif %}
+            </div>
+          </td>
+          <td>
+            {% if u.is_active %}
+              <span class="badge badge-success">ACTIVE</span>
+            {% else %}
+              <span class="badge badge-muted">INACTIVE</span>
+            {% endif %}
+          </td>
+          <td>
+            <span class="muted" style="font-size: 0.75rem; font-family: var(--font-mono);">
+              {{ u.created_at.strftime('%Y-%m-%d %H:%M') if u.created_at else '—' }}
+            </span>
+          </td>
+          <td style="text-align: right; white-space: nowrap;">
+            {% if is_sc_member %}
+              <button type="button" class="btn sm secondary" style="border-color: #6b1419; color: var(--accent);" onclick="openResetModal('{{ u.id }}', '{{ u.email }}')">
+                Reset Password
+              </button>
+            {% else %}
+              <span class="muted" style="font-size: 0.775rem;" title="Password reset is restricted to sc_member role accounts">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">No users found.</p>
+  {% endif %}
+</div>
+
+<!-- Reset Password Modal -->
+<dialog id="resetPasswordModal" style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; color: var(--text); padding: 2rem; max-width: 480px; width: 90%; box-shadow: 0 16px 40px rgba(0,0,0,0.8);">
+  <form id="resetPasswordForm" method="post" action="" onsubmit="return handleResetSubmit(event)">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+
+    <h2 style="margin-top: 0; margin-bottom: 0.5rem;">RESET PASSWORD</h2>
+    <p class="muted" style="font-size: 0.85rem; margin-top: 0; margin-bottom: 1.5rem;">
+      Direct password reset for <strong id="modalUserEmail" style="color: #FFFFFF; font-family: var(--font-mono);"></strong>.
+      This immediately updates the password and revokes any active sessions for this member.
+    </p>
+
+    <div style="margin-bottom: 1.25rem;">
+      <label for="new_password" style="margin-top: 0;">New Password *</label>
+      <div class="password-wrapper">
+        <input id="new_password" name="new_password" type="password" required minlength="8" placeholder="At least 8 characters" autocomplete="new-password">
+        <button type="button" class="password-toggle-btn" onclick="togglePassword(this)" aria-label="Show password">
+          <svg class="eye-open" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+          <svg class="eye-closed" style="display:none;" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div style="margin-bottom: 1.5rem;">
+      <label for="confirm_password" style="margin-top: 0;">Confirm New Password *</label>
+      <div class="password-wrapper">
+        <input id="confirm_password" name="confirm_password" type="password" required minlength="8" placeholder="Re-enter new password" autocomplete="new-password">
+        <button type="button" class="password-toggle-btn" onclick="togglePassword(this)" aria-label="Show password">
+          <svg class="eye-open" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+          <svg class="eye-closed" style="display:none;" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>
+        </button>
+      </div>
+      <div id="modalError" style="display: none; color: #ff6b72; font-size: 0.8rem; margin-top: 0.5rem;"></div>
+    </div>
+
+    <div style="display: flex; justify-content: flex-end; gap: 0.75rem;">
+      <button type="button" class="btn secondary" onclick="closeResetModal()">Cancel</button>
+      <button type="submit" id="modalSubmitBtn">Reset Password</button>
+    </div>
+  </form>
+</dialog>
+
+<style>
+  dialog::backdrop {
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(2px);
+  }
+</style>
+
+<script>
+  var currentTargetEmail = '';
+
+  function openResetModal(userId, email) {
+    currentTargetEmail = email;
+    var modal = document.getElementById('resetPasswordModal');
+    var form = document.getElementById('resetPasswordForm');
+    var emailSpan = document.getElementById('modalUserEmail');
+    var errorDiv = document.getElementById('modalError');
+
+    form.action = '/admin/dashboard/users/' + encodeURIComponent(userId) + '/reset-password';
+    emailSpan.innerText = email;
+    document.getElementById('new_password').value = '';
+    document.getElementById('confirm_password').value = '';
+    errorDiv.style.display = 'none';
+    errorDiv.innerText = '';
+
+    modal.showModal();
+  }
+
+  function closeResetModal() {
+    var modal = document.getElementById('resetPasswordModal');
+    modal.close();
+  }
+
+  function handleResetSubmit(e) {
+    var p1 = document.getElementById('new_password').value;
+    var p2 = document.getElementById('confirm_password').value;
+    var errorDiv = document.getElementById('modalError');
+
+    if (p1.length < 8) {
+      e.preventDefault();
+      errorDiv.innerText = 'Password must be at least 8 characters long.';
+      errorDiv.style.display = 'block';
+      return false;
+    }
+
+    if (p1 !== p2) {
+      e.preventDefault();
+      errorDiv.innerText = 'Passwords do not match.';
+      errorDiv.style.display = 'block';
+      return false;
+    }
+
+    errorDiv.style.display = 'none';
+
+    var confirmed = window.confirm('Are you sure you want to reset password for user "' + currentTargetEmail + '"?\nThis will take effect immediately and revoke all their active sessions.');
+    if (!confirmed) {
+      e.preventDefault();
+      return false;
+    }
+
+    return true;
+  }
+</script>
+{% endblock %}

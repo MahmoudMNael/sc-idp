@@ -1032,12 +1032,18 @@ def main() -> None:
         dash_forbidden = c.get("/admin/dashboard")
         assert dash_forbidden.status_code == 403
         assert "IdP admin role required" in dash_forbidden.text
+        dash_users_forbidden = c.get("/admin/dashboard/users")
+        assert dash_users_forbidden.status_code == 403
+        assert "IdP admin role required" in dash_users_forbidden.text
 
         # Log out -> unauthenticated access to /admin/dashboard redirects to /login
         c.get("/logout", follow_redirects=False)
         dash_anon = c.get("/admin/dashboard", follow_redirects=False)
         assert dash_anon.status_code == 303
         assert "/login?next=/admin/dashboard" in dash_anon.headers["location"]
+        dash_users_anon = c.get("/admin/dashboard/users", follow_redirects=False)
+        assert dash_users_anon.status_code == 303
+        assert "/login?next=/admin/dashboard" in dash_users_anon.headers["location"]
 
         # Admin access (vip_email) succeeds
         vip_login = c.post(
@@ -1099,6 +1105,95 @@ def main() -> None:
             follow_redirects=False,
         )
         assert toggle_back.status_code == 303
+
+        # Test Admin Users Dashboard
+        dash_clients = c.get("/admin/dashboard")
+        assert 'href="/admin/dashboard/users"' in dash_clients.text
+
+        users_page = c.get("/admin/dashboard/users")
+        assert users_page.status_code == 200
+        assert "USER ACCOUNTS" in users_page.text
+        assert 'href="/admin/dashboard"' in users_page.text
+        assert sc_email in users_page.text
+        assert "sc_member" in users_page.text
+        assert f"openResetModal('{sc_assigns['user_id']}', '{sc_email}')" in users_page.text
+
+        sc_uid = sc_assigns["user_id"]
+        normal_uid = c.get(f"/admin/roles/assignments?email={email}", headers=admin).json()["user_id"]
+
+        # Attempt password reset on non-sc_member user -> 403
+        bad_target_resp = c.post(
+            f"/admin/dashboard/users/{normal_uid}/reset-password",
+            data={
+                "new_password": "new-admin-password-123",
+                "confirm_password": "new-admin-password-123",
+                "csrf_token": csrf_token(users_page.text),
+            },
+        )
+        assert bad_target_resp.status_code == 403
+        assert "sc_member" in bad_target_resp.text
+
+        # Attempt password reset with mismatched passwords -> 400
+        mismatch_resp = c.post(
+            f"/admin/dashboard/users/{sc_uid}/reset-password",
+            data={
+                "new_password": "new-admin-password-123",
+                "confirm_password": "different-password-123",
+                "csrf_token": csrf_token(bad_target_resp.text),
+            },
+        )
+        assert mismatch_resp.status_code == 400
+        assert "Passwords do not match" in mismatch_resp.text
+
+        # Attempt password reset with short password -> 400
+        short_resp = c.post(
+            f"/admin/dashboard/users/{sc_uid}/reset-password",
+            data={
+                "new_password": "short",
+                "confirm_password": "short",
+                "csrf_token": csrf_token(mismatch_resp.text),
+            },
+        )
+        assert short_resp.status_code == 400
+        assert "at least 8 characters" in short_resp.text
+
+        # Valid password reset for sc_member
+        new_sc_password = "brand-new-sc-password-999"
+        reset_ok = c.post(
+            f"/admin/dashboard/users/{sc_uid}/reset-password",
+            data={
+                "new_password": new_sc_password,
+                "confirm_password": new_sc_password,
+                "csrf_token": csrf_token(short_resp.text),
+            },
+        )
+        assert reset_ok.status_code == 200, f"Got {reset_ok.status_code}: {reset_ok.text}"
+        assert f"Password for {sc_email} was reset successfully" in reset_ok.text
+
+        # Verify old password for sc_email fails and new password succeeds
+        c.get("/logout", follow_redirects=False)
+        old_login_fail = c.post(
+            "/login",
+            data={"email": sc_email, "password": password, "csrf_token": csrf_token(c.get("/login").text)},
+            follow_redirects=False,
+        )
+        assert old_login_fail.status_code == 401
+        assert "Invalid email or password" in old_login_fail.text
+
+        new_login_ok = c.post(
+            "/login",
+            data={"email": sc_email, "password": new_sc_password, "csrf_token": csrf_token(c.get("/login").text)},
+            follow_redirects=False,
+        )
+        assert new_login_ok.status_code == 303
+
+        # Re-authenticate as vip_email (admin) to continue the rest of the flow
+        c.get("/logout", follow_redirects=False)
+        c.post(
+            "/login",
+            data={"email": vip_email, "password": password, "csrf_token": csrf_token(c.get("/login").text)},
+            follow_redirects=False,
+        )
 
         # Test OAuth PKCE flow with this newly registered client
         new_code, new_verifier = login_and_code(
