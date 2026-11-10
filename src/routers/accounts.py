@@ -68,8 +68,17 @@ async def oauth_context(session: AsyncSession, settings: Settings, nxt: str | No
 
 
 def after_login_target(settings: Settings, nxt: str | None) -> str:
+    if not nxt:
+        return "/account"
     query = load_next(settings, nxt)
-    return f"/authorize?{query}" if query else "/"
+    if query:
+        return f"/authorize?{query}"
+    clean = nxt.strip()
+    if clean.startswith("/") and not clean.startswith("//") and not clean.startswith("/\\"):
+        if clean in ("/", "/login") or clean.startswith("/login?"):
+            return "/account"
+        return clean
+    return "/account"
 
 
 def requires_reauth(settings: Settings, nxt: str | None) -> bool:

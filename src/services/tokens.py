@@ -36,6 +36,7 @@ ALLOWED_CLAIMS = frozenset(
         "family_name",
         "name",
         "idp_roles",
+        "roles",
     }
 )
 
@@ -131,6 +132,16 @@ async def _mint_pair(
         "auth_time": _ts(auth_time),
         "amr": amr,
     }
+    scopes_set = set(scope.split())
+    if "idp_roles" in scopes_set or "roles" in scopes_set:
+        from src.services.roles import get_user_roles
+
+        user_roles = await get_user_roles(session, user.id)
+        access_claims["idp_roles"] = user_roles
+        access_claims["roles"] = user_roles
+    else:
+        user_roles = None
+
     access = mint_idp_jwt(access_claims, key)
     id_claims: dict[str, Any] = {
         "iss": settings.public_base,
@@ -144,7 +155,6 @@ async def _mint_pair(
     }
     if nonce:
         id_claims["nonce"] = nonce
-    scopes_set = set(scope.split())
     if "email" in scopes_set:
         id_claims["email"] = user.email
         id_claims["email_verified"] = user.email_verified
@@ -156,10 +166,9 @@ async def _mint_pair(
         full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
         if full_name:
             id_claims["name"] = full_name
-    if "idp_roles" in scopes_set or "roles" in scopes_set:
-        from src.services.roles import get_user_roles
-
-        id_claims["idp_roles"] = await get_user_roles(session, user.id)
+    if user_roles is not None:
+        id_claims["idp_roles"] = user_roles
+        id_claims["roles"] = user_roles
     id_token = mint_idp_jwt(id_claims, key)
     refresh_raw = random_token(48)
     row = RefreshToken(

@@ -946,13 +946,19 @@ def main() -> None:
         ks = KeySet.import_key_set(jwks_data)
         verified_id = jwt.decode(tok_r.json()["id_token"], ks).claims
         assert verified_id.get("idp_roles") == ["admin"]
+        assert verified_id.get("roles") == ["admin"]
 
-        # userinfo includes idp_roles
+        verified_at = jwt.decode(tok_r.json()["access_token"], ks).claims
+        assert verified_at.get("idp_roles") == ["admin"]
+        assert verified_at.get("roles") == ["admin"]
+
+        # userinfo includes idp_roles and roles
         u_info = c.get(
             "/userinfo",
             headers={"Authorization": f"Bearer {tok_r.json()['access_token']}"},
         ).json()
         assert u_info.get("idp_roles") == ["admin"]
+        assert u_info.get("roles") == ["admin"]
 
         # 7. test require_idp_role route guard dependency
         from fastapi import Depends
@@ -1032,12 +1038,18 @@ def main() -> None:
         dash_forbidden = c.get("/admin/dashboard")
         assert dash_forbidden.status_code == 403
         assert "IdP admin role required" in dash_forbidden.text
+        dash_users_forbidden = c.get("/admin/dashboard/users")
+        assert dash_users_forbidden.status_code == 403
+        assert "IdP admin role required" in dash_users_forbidden.text
 
         # Log out -> unauthenticated access to /admin/dashboard redirects to /login
         c.get("/logout", follow_redirects=False)
         dash_anon = c.get("/admin/dashboard", follow_redirects=False)
         assert dash_anon.status_code == 303
         assert "/login?next=/admin/dashboard" in dash_anon.headers["location"]
+        dash_users_anon = c.get("/admin/dashboard/users", follow_redirects=False)
+        assert dash_users_anon.status_code == 303
+        assert "/login?next=/admin/dashboard" in dash_users_anon.headers["location"]
 
         # Admin access (vip_email) succeeds
         vip_login = c.post(
@@ -1099,6 +1111,190 @@ def main() -> None:
             follow_redirects=False,
         )
         assert toggle_back.status_code == 303
+
+        # Test Admin Users Dashboard
+        dash_clients = c.get("/admin/dashboard")
+        assert 'href="/admin/dashboard/users"' in dash_clients.text
+
+        users_page = c.get("/admin/dashboard/users")
+        assert users_page.status_code == 200
+        assert "USER ACCOUNTS" in users_page.text
+        assert 'href="/admin/dashboard"' in users_page.text
+        assert sc_email in users_page.text
+        assert "sc_member" in users_page.text
+        assert f"openResetModal('{sc_assigns['user_id']}', '{sc_email}')" in users_page.text
+
+        sc_uid = sc_assigns["user_id"]
+        normal_uid = c.get(f"/admin/roles/assignments?email={email}", headers=admin).json()["user_id"]
+
+        # Attempt password reset on non-sc_member user -> 403
+        bad_target_resp = c.post(
+            f"/admin/dashboard/users/{normal_uid}/reset-password",
+            data={
+                "new_password": "new-admin-password-123",
+                "confirm_password": "new-admin-password-123",
+                "csrf_token": csrf_token(users_page.text),
+            },
+        )
+        assert bad_target_resp.status_code == 403
+        assert "sc_member" in bad_target_resp.text
+
+        # Attempt password reset with mismatched passwords -> 400
+        mismatch_resp = c.post(
+            f"/admin/dashboard/users/{sc_uid}/reset-password",
+            data={
+                "new_password": "new-admin-password-123",
+                "confirm_password": "different-password-123",
+                "csrf_token": csrf_token(bad_target_resp.text),
+            },
+        )
+        assert mismatch_resp.status_code == 400
+        assert "Passwords do not match" in mismatch_resp.text
+
+        # Attempt password reset with short password -> 400
+        short_resp = c.post(
+            f"/admin/dashboard/users/{sc_uid}/reset-password",
+            data={
+                "new_password": "short",
+                "confirm_password": "short",
+                "csrf_token": csrf_token(mismatch_resp.text),
+            },
+        )
+        assert short_resp.status_code == 400
+        assert "at least 8 characters" in short_resp.text
+
+        # Valid password reset for sc_member
+        new_sc_password = "brand-new-sc-password-999"
+        reset_ok = c.post(
+            f"/admin/dashboard/users/{sc_uid}/reset-password",
+            data={
+                "new_password": new_sc_password,
+                "confirm_password": new_sc_password,
+                "csrf_token": csrf_token(short_resp.text),
+            },
+        )
+        assert reset_ok.status_code == 200, f"Got {reset_ok.status_code}: {reset_ok.text}"
+        assert f"Password for {sc_email} was reset successfully" in reset_ok.text
+
+        # Verify old password for sc_email fails and new password succeeds
+        c.get("/logout", follow_redirects=False)
+        old_login_fail = c.post(
+            "/login",
+            data={"email": sc_email, "password": password, "csrf_token": csrf_token(c.get("/login").text)},
+            follow_redirects=False,
+        )
+        assert old_login_fail.status_code == 401
+        assert "Invalid email or password" in old_login_fail.text
+
+        new_login_ok = c.post(
+            "/login",
+            data={"email": sc_email, "password": new_sc_password, "csrf_token": csrf_token(c.get("/login").text)},
+            follow_redirects=False,
+        )
+        assert new_login_ok.status_code == 303
+
+        # Re-authenticate as vip_email (admin) to continue the rest of the flow
+        c.get("/logout", follow_redirects=False)
+        c.post(
+            "/login",
+            data={"email": vip_email, "password": password, "csrf_token": csrf_token(c.get("/login").text)},
+            follow_redirects=False,
+        )
+
+        users_page2 = c.get("/admin/dashboard/users")
+        vip_uid = c.get(f"/admin/roles/assignments?email={vip_email}", headers=admin).json()["user_id"]
+
+        # Password reset works for admin accounts as well (and revokes their existing session)
+        admin_new_pass = "admin-secret-new-pwd-789"
+        reset_admin_ok = c.post(
+            f"/admin/dashboard/users/{vip_uid}/reset-password",
+            data={
+                "new_password": admin_new_pass,
+                "confirm_password": admin_new_pass,
+                "csrf_token": csrf_token(users_page2.text),
+            },
+        )
+        assert reset_admin_ok.status_code == 200
+        assert f"Password for {vip_email} was reset successfully" in reset_admin_ok.text
+
+        # Re-login with the new admin password
+        admin_relogin = c.post(
+            "/login",
+            data={"email": vip_email, "password": admin_new_pass, "csrf_token": csrf_token(c.get("/login").text)},
+            follow_redirects=False,
+        )
+        assert admin_relogin.status_code == 303
+
+        # Test Assign Multiple Roles via Dashboard to regular user (normal_uid)
+        users_page3 = c.get("/admin/dashboard/users")
+        assert 'data-roles=' in users_page3.text
+        # Test assign multiple roles at once: ["sc_member", "admin"]
+        assign_multi_resp = c.post(
+            f"/admin/dashboard/users/{normal_uid}/roles",
+            data={"roles": ["sc_member", "admin"], "csrf_token": csrf_token(users_page3.text)},
+            follow_redirects=False,
+        )
+        assert assign_multi_resp.status_code == 303
+        norm_assigns = c.get(f"/admin/roles/assignments?email={email}", headers=admin).json()
+        assert set(norm_assigns["user_roles"]) == {"admin", "sc_member"}
+
+        # Now normal_uid has sc_member & admin, so password reset is allowed for them
+        users_page4 = c.get("/admin/dashboard/users")
+        reset_promoted_ok = c.post(
+            f"/admin/dashboard/users/{normal_uid}/reset-password",
+            data={
+                "new_password": "promoted-user-pass-123",
+                "confirm_password": "promoted-user-pass-123",
+                "csrf_token": csrf_token(users_page4.text),
+            },
+        )
+        assert reset_promoted_ok.status_code == 200
+
+        # Test update roles checklist to remove admin and keep only sc_member
+        users_page5 = c.get("/admin/dashboard/users")
+        update_resp = c.post(
+            f"/admin/dashboard/users/{normal_uid}/roles",
+            data={"roles": ["sc_member"], "csrf_token": csrf_token(users_page5.text)},
+            follow_redirects=False,
+        )
+        assert update_resp.status_code == 303
+        norm_after_update = c.get(f"/admin/roles/assignments?email={email}", headers=admin).json()
+        assert norm_after_update["user_roles"] == ["sc_member"]
+
+        # Test self-lockout protection on own account: even if roles is empty, admin role is retained
+        users_page6 = c.get("/admin/dashboard/users")
+        self_update_resp = c.post(
+            f"/admin/dashboard/users/{vip_uid}/roles",
+            data={"roles": [], "csrf_token": csrf_token(users_page6.text)},
+            follow_redirects=False,
+        )
+        assert self_update_resp.status_code == 303
+        vip_after_self = c.get(f"/admin/roles/assignments?email={vip_email}", headers=admin).json()
+        assert "admin" in vip_after_self["user_roles"]
+
+        # Test Login Redirections:
+        # 1. Direct login without next redirects directly to /account (for user without TOTP like sc_email)
+        c.get("/logout", follow_redirects=False)
+        direct_login = c.post(
+            "/login",
+            data={"email": sc_email, "password": new_sc_password, "csrf_token": csrf_token(c.get("/login").text)},
+            follow_redirects=False,
+        )
+        assert direct_login.status_code == 303
+        assert direct_login.headers["location"] == "/account"
+
+        # 2. Login with relative next path redirects directly to that path
+        c.get("/logout", follow_redirects=False)
+        next_login = c.post(
+            "/login",
+            data={"email": vip_email, "password": admin_new_pass, "next": "/admin/dashboard", "csrf_token": csrf_token(c.get("/login?next=/admin/dashboard").text)},
+            follow_redirects=False,
+        )
+        assert next_login.status_code == 303
+        assert next_login.headers["location"] == "/admin/dashboard"
+
+        # Keep password variable updated for vip_email for downstream test steps
+        password = admin_new_pass
 
         # Test OAuth PKCE flow with this newly registered client
         new_code, new_verifier = login_and_code(
