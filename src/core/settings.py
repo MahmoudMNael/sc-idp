@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     otp_resend_cooldown: int = 30
     company_domain: str = "shortcircuitcompany.com"
     company_role: str = "sc_member"
+    totp_issuer: str = "Short Circuit"
 
     mail_backend: str = "console"
     smtp_host: str = ""

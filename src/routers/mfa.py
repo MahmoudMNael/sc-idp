@@ -124,7 +124,7 @@ async def account_mfa(
     pending_uri = None
     if user.totp_secret_enc and not user.totp_enabled:
         secret = decrypt_secret(settings.key_encryption_key, user.totp_secret_enc)
-        pending_uri = TOTP(secret).provisioning_uri(name=user.email, issuer_name="sc-idp")
+        pending_uri = TOTP(secret).provisioning_uri(name=user.email, issuer_name=settings.totp_issuer)
     return page(
         request,
         settings,
@@ -296,7 +296,7 @@ async def mfa_enable(
         return RedirectResponse("/login", status_code=303)
     secret = decrypt_secret(settings.key_encryption_key, user.totp_secret_enc)
     if not TOTP(secret).verify(code.strip(), valid_window=1):
-        uri = TOTP(secret).provisioning_uri(name=user.email, issuer_name="sc-idp")
+        uri = TOTP(secret).provisioning_uri(name=user.email, issuer_name=settings.totp_issuer)
         return page(
             request,
             settings,

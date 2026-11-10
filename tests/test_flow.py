@@ -534,6 +534,8 @@ def main() -> None:
         )
         secret_m = re.search(r"secret=([A-Z2-7]+)", setup.text)
         assert secret_m, setup.text[:500]
+        assert "Short%20Circuit" in setup.text or "Short Circuit" in setup.text
+        assert "mfa-qrcode" in setup.text
         import pyotp
 
         totp_secret = secret_m.group(1)
@@ -609,9 +611,17 @@ def main() -> None:
 
         # forgot password 2-step OTP flow
         forgot_page = c.get("/forgot-password")
+        bad_forgot = c.post(
+            "/forgot-password",
+            data={"email": "nobody-exists@example.com", "csrf_token": csrf_token(forgot_page.text)},
+            follow_redirects=False,
+        )
+        assert bad_forgot.status_code == 400
+        assert "No active account found with this email." in bad_forgot.text
+
         f = c.post(
             "/forgot-password",
-            data={"email": email, "csrf_token": csrf_token(forgot_page.text)},
+            data={"email": email, "csrf_token": csrf_token(bad_forgot.text)},
             follow_redirects=False,
         )
         assert f.status_code == 303
