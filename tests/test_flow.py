@@ -85,6 +85,7 @@ def main() -> None:
     async def ensure_schema() -> None:
         engine = create_async_engine(settings.sqlalchemy_url, poolclass=NullPool)
         async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
             await conn.run_sync(Base.metadata.create_all)
         await engine.dispose()
 
@@ -946,13 +947,19 @@ def main() -> None:
         ks = KeySet.import_key_set(jwks_data)
         verified_id = jwt.decode(tok_r.json()["id_token"], ks).claims
         assert verified_id.get("idp_roles") == ["admin"]
+        assert verified_id.get("roles") == ["admin"]
 
-        # userinfo includes idp_roles
+        verified_at = jwt.decode(tok_r.json()["access_token"], ks).claims
+        assert verified_at.get("idp_roles") == ["admin"]
+        assert verified_at.get("roles") == ["admin"]
+
+        # userinfo includes idp_roles and roles
         u_info = c.get(
             "/userinfo",
             headers={"Authorization": f"Bearer {tok_r.json()['access_token']}"},
         ).json()
         assert u_info.get("idp_roles") == ["admin"]
+        assert u_info.get("roles") == ["admin"]
 
         # 7. test require_idp_role route guard dependency
         from fastapi import Depends
@@ -1219,18 +1226,20 @@ def main() -> None:
         )
         assert admin_relogin.status_code == 303
 
-        # Test Assign Role via Dashboard to regular user (normal_uid)
+        # Test Assign Multiple Roles via Dashboard to regular user (normal_uid)
         users_page3 = c.get("/admin/dashboard/users")
-        assign_resp = c.post(
-            f"/admin/dashboard/users/{normal_uid}/roles/assign",
-            data={"role_name": "sc_member", "csrf_token": csrf_token(users_page3.text)},
+        assert 'data-roles=' in users_page3.text
+        # Test assign multiple roles at once: ["sc_member", "admin"]
+        assign_multi_resp = c.post(
+            f"/admin/dashboard/users/{normal_uid}/roles",
+            data={"roles": ["sc_member", "admin"], "csrf_token": csrf_token(users_page3.text)},
             follow_redirects=False,
         )
-        assert assign_resp.status_code == 303, f"Assign resp got {assign_resp.status_code}: {assign_resp.text}"
+        assert assign_multi_resp.status_code == 303
         norm_assigns = c.get(f"/admin/roles/assignments?email={email}", headers=admin).json()
-        assert "sc_member" in norm_assigns["user_roles"], f"norm_assigns: {norm_assigns}, assign_resp={assign_resp.headers}"
+        assert set(norm_assigns["user_roles"]) == {"admin", "sc_member"}
 
-        # Now normal_uid has sc_member, so password reset is now allowed for them
+        # Now normal_uid has sc_member & admin, so password reset is allowed for them
         users_page4 = c.get("/admin/dashboard/users")
         reset_promoted_ok = c.post(
             f"/admin/dashboard/users/{normal_uid}/reset-password",
@@ -1242,25 +1251,48 @@ def main() -> None:
         )
         assert reset_promoted_ok.status_code == 200
 
-        # Test Remove Role via Dashboard from normal_uid
+        # Test update roles checklist to remove admin and keep only sc_member
         users_page5 = c.get("/admin/dashboard/users")
-        remove_resp = c.post(
-            f"/admin/dashboard/users/{normal_uid}/roles/remove",
-            data={"role_name": "sc_member", "csrf_token": csrf_token(users_page5.text)},
+        update_resp = c.post(
+            f"/admin/dashboard/users/{normal_uid}/roles",
+            data={"roles": ["sc_member"], "csrf_token": csrf_token(users_page5.text)},
             follow_redirects=False,
         )
-        assert remove_resp.status_code == 303
-        norm_after_remove = c.get(f"/admin/roles/assignments?email={email}", headers=admin).json()
-        assert "sc_member" not in norm_after_remove["user_roles"]
+        assert update_resp.status_code == 303
+        norm_after_update = c.get(f"/admin/roles/assignments?email={email}", headers=admin).json()
+        assert norm_after_update["user_roles"] == ["sc_member"]
 
-        # Test prevent removing admin role from own account
+        # Test self-lockout protection on own account: even if roles is empty, admin role is retained
         users_page6 = c.get("/admin/dashboard/users")
-        self_remove_resp = c.post(
-            f"/admin/dashboard/users/{vip_uid}/roles/remove",
-            data={"role_name": "admin", "csrf_token": csrf_token(users_page6.text)},
+        self_update_resp = c.post(
+            f"/admin/dashboard/users/{vip_uid}/roles",
+            data={"roles": [], "csrf_token": csrf_token(users_page6.text)},
+            follow_redirects=False,
         )
-        assert self_remove_resp.status_code == 400
-        assert "cannot remove the admin role from your own account" in self_remove_resp.text
+        assert self_update_resp.status_code == 303
+        vip_after_self = c.get(f"/admin/roles/assignments?email={vip_email}", headers=admin).json()
+        assert "admin" in vip_after_self["user_roles"]
+
+        # Test Login Redirections:
+        # 1. Direct login without next redirects directly to /account (for user without TOTP like sc_email)
+        c.get("/logout", follow_redirects=False)
+        direct_login = c.post(
+            "/login",
+            data={"email": sc_email, "password": new_sc_password, "csrf_token": csrf_token(c.get("/login").text)},
+            follow_redirects=False,
+        )
+        assert direct_login.status_code == 303
+        assert direct_login.headers["location"] == "/account"
+
+        # 2. Login with relative next path redirects directly to that path
+        c.get("/logout", follow_redirects=False)
+        next_login = c.post(
+            "/login",
+            data={"email": vip_email, "password": admin_new_pass, "next": "/admin/dashboard", "csrf_token": csrf_token(c.get("/login?next=/admin/dashboard").text)},
+            follow_redirects=False,
+        )
+        assert next_login.status_code == 303
+        assert next_login.headers["location"] == "/admin/dashboard"
 
         # Keep password variable updated for vip_email for downstream test steps
         password = admin_new_pass

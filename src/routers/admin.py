@@ -632,4 +632,64 @@ async def admin_user_remove_role(
     return RedirectResponse("/admin/dashboard/users", status_code=303)
 
 
+@router.post("/dashboard/users/{user_id}/roles")
+async def admin_user_update_roles(
+    user_id: str,
+    request: Request,
+    roles: list[str] = Form(default_factory=list),
+    csrf_token: str = Form(...),
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+):
+    admin_user, err_resp = await _get_admin_user(request, session, settings)
+    if err_resp:
+        return err_resp
+
+    try:
+        target_uuid = uuid.UUID(user_id)
+    except ValueError:
+        raise HTTPException(400, "Invalid user ID")
+
+    target_user = await session.get(User, target_uuid)
+    if not target_user:
+        raise HTTPException(404, "User not found")
+
+    if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
+        return page(request, settings, "error.html", status=400, error="Invalid form token.")
+
+    selected_roles = {r.strip().lower() for r in roles if r.strip()}
+
+    if target_user.id == admin_user.id:
+        selected_roles.add(RoleName.ADMIN)
+
+    current_roles = set(await get_user_roles(session, target_user.id))
+
+    to_add = selected_roles - current_roles
+    to_remove = current_roles - selected_roles
+
+    for r in to_add:
+        await assign_role_to_user(session, target_user.id, r)
+
+    for r in to_remove:
+        await remove_role_from_user(session, target_user.id, r)
+
+    if to_add or to_remove:
+        await audit(
+            session,
+            "admin_update_roles",
+            user_id=target_user.id,
+            ip=ip_of(request),
+            detail={
+                "added": sorted(to_add),
+                "removed": sorted(to_remove),
+                "by_admin": str(admin_user.id),
+                "via": "dashboard",
+            },
+        )
+        await session.commit()
+
+    return RedirectResponse("/admin/dashboard/users", status_code=303)
+
+
+
 

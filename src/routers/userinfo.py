@@ -48,5 +48,7 @@ async def userinfo(
     if "idp_roles" in scopes_set or "roles" in scopes_set:
         from src.services.roles import get_user_roles
 
-        body["idp_roles"] = await get_user_roles(session, user.id)
+        roles_list = await get_user_roles(session, user.id)
+        body["idp_roles"] = roles_list
+        body["roles"] = roles_list
     return body
