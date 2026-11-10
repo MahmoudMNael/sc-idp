@@ -1,18 +1,20 @@
 import hmac
 import secrets
+import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Form, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.crypto import csrf_ok, hash_token
-from src.core.deps import db_dep, s_dep
+from src.core.crypto import csrf_ok, hash_password, hash_token
+from src.core.deps import db_dep, ip_of, s_dep
 from src.core.keys import rotate_keys
 from src.core.settings import Settings
 from src.html import page
-from src.models import IdpRole, OAuthClient, User
+from src.models import AuthSession, IdpRole, OAuthClient, User, UserIdpRole
 from src.services.audit import audit
 from src.services.roles import (
     RoleName,
@@ -417,5 +419,277 @@ async def admin_toggle_client_status(
     await session.commit()
 
     return RedirectResponse("/admin/dashboard", status_code=303)
+
+
+@router.get("/dashboard/users")
+async def admin_dashboard_users(
+    request: Request,
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+):
+    admin_user, err_resp = await _get_admin_user(request, session, settings)
+    if err_resp:
+        return err_resp
+
+    users = (
+        await session.execute(select(User).order_by(User.created_at.desc()))
+    ).scalars().all()
+
+    role_rows = (await session.execute(select(UserIdpRole.user_id, UserIdpRole.role_name))).all()
+    user_roles_map: dict[uuid.UUID, list[str]] = {}
+    for uid, rname in role_rows:
+        user_roles_map.setdefault(uid, []).append(rname)
+
+    sc_member_count = sum(1 for roles in user_roles_map.values() if RoleName.SC_MEMBER in roles)
+    all_roles = (await session.execute(select(IdpRole).order_by(IdpRole.name))).scalars().all()
+
+    return page(
+        request,
+        settings,
+        "admin_users.html",
+        current_user=admin_user,
+        is_admin=True,
+        users=users,
+        user_roles_map=user_roles_map,
+        sc_member_count=sc_member_count,
+        all_roles=all_roles,
+    )
+
+
+@router.post("/dashboard/users/{user_id}/reset-password")
+async def admin_user_reset_password(
+    user_id: str,
+    request: Request,
+    new_password: str = Form(""),
+    confirm_password: str = Form(""),
+    csrf_token: str = Form(...),
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+):
+    admin_user, err_resp = await _get_admin_user(request, session, settings)
+    if err_resp:
+        return err_resp
+
+    try:
+        target_uuid = uuid.UUID(user_id)
+    except ValueError:
+        raise HTTPException(400, "Invalid user ID")
+
+    target_user = await session.get(User, target_uuid)
+
+    users = (
+        await session.execute(select(User).order_by(User.created_at.desc()))
+    ).scalars().all()
+    role_rows = (await session.execute(select(UserIdpRole.user_id, UserIdpRole.role_name))).all()
+    user_roles_map: dict[uuid.UUID, list[str]] = {}
+    for uid, rname in role_rows:
+        user_roles_map.setdefault(uid, []).append(rname)
+    sc_member_count = sum(1 for roles in user_roles_map.values() if RoleName.SC_MEMBER in roles)
+    all_roles = (await session.execute(select(IdpRole).order_by(IdpRole.name))).scalars().all()
+
+    def _render_page(error: str | None = None, message: str | None = None, status: int = 200):
+        return page(
+            request,
+            settings,
+            "admin_users.html",
+            status=status,
+            current_user=admin_user,
+            is_admin=True,
+            users=users,
+            user_roles_map=user_roles_map,
+            sc_member_count=sc_member_count,
+            all_roles=all_roles,
+            flash_error=error,
+            flash_message=message,
+        )
+
+    if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
+        return _render_page(error="Invalid or expired form token. Please try again.", status=400)
+
+    if not target_user:
+        return _render_page(error="Target user not found.", status=404)
+
+    target_roles = user_roles_map.get(target_user.id, [])
+    allowed_roles = {RoleName.SC_MEMBER, RoleName.ADMIN}
+    if not any(r in allowed_roles for r in target_roles):
+        return _render_page(error="Password reset is only permitted for members and administrators.", status=403)
+
+    if len(new_password) < 8:
+        return _render_page(error="Password must be at least 8 characters long.", status=400)
+
+    if new_password != confirm_password:
+        return _render_page(error="Passwords do not match.", status=400)
+
+    target_user.password_hash = hash_password(settings, new_password)
+    target_user.failed_login_count = 0
+    target_user.locked_until = None
+
+    now = datetime.now(UTC)
+    await session.execute(
+        update(AuthSession)
+        .where(
+            AuthSession.user_id == target_user.id,
+            AuthSession.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
+
+    await audit(
+        session,
+        "admin_user_password_reset",
+        user_id=target_user.id,
+        ip=ip_of(request),
+        detail={"by_admin": str(admin_user.id), "email": target_user.email, "via": "dashboard"},
+    )
+    await session.commit()
+
+    return _render_page(message=f"Password for {target_user.email} was reset successfully.")
+
+
+@router.post("/dashboard/users/{user_id}/roles/assign")
+async def admin_user_assign_role(
+    user_id: str,
+    request: Request,
+    role_name: str = Form(...),
+    csrf_token: str = Form(...),
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+):
+    admin_user, err_resp = await _get_admin_user(request, session, settings)
+    if err_resp:
+        return err_resp
+
+    try:
+        target_uuid = uuid.UUID(user_id)
+    except ValueError:
+        raise HTTPException(400, "Invalid user ID")
+
+    target_user = await session.get(User, target_uuid)
+    if not target_user:
+        raise HTTPException(404, "User not found")
+
+    if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
+        return page(request, settings, "error.html", status=400, error="Invalid form token.")
+
+    clean_role = role_name.strip().lower()
+    if not clean_role:
+        raise HTTPException(400, "Role name cannot be empty")
+
+    assigned = await assign_role_to_user(session, target_user.id, clean_role)
+    if assigned:
+        await audit(
+            session,
+            "admin_assign_role",
+            user_id=target_user.id,
+            ip=ip_of(request),
+            detail={"role": clean_role, "by_admin": str(admin_user.id), "via": "dashboard"},
+        )
+        await session.commit()
+
+    return RedirectResponse("/admin/dashboard/users", status_code=303)
+
+
+@router.post("/dashboard/users/{user_id}/roles/remove")
+async def admin_user_remove_role(
+    user_id: str,
+    request: Request,
+    role_name: str = Form(...),
+    csrf_token: str = Form(...),
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+):
+    admin_user, err_resp = await _get_admin_user(request, session, settings)
+    if err_resp:
+        return err_resp
+
+    try:
+        target_uuid = uuid.UUID(user_id)
+    except ValueError:
+        raise HTTPException(400, "Invalid user ID")
+
+    target_user = await session.get(User, target_uuid)
+    if not target_user:
+        raise HTTPException(404, "User not found")
+
+    if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
+        return page(request, settings, "error.html", status=400, error="Invalid form token.")
+
+    clean_role = role_name.strip().lower()
+    if target_user.id == admin_user.id and clean_role == RoleName.ADMIN:
+        return page(request, settings, "error.html", status=400, error="You cannot remove the admin role from your own account.")
+
+    removed = await remove_role_from_user(session, target_user.id, clean_role)
+    if removed:
+        await audit(
+            session,
+            "admin_unassign_role",
+            user_id=target_user.id,
+            ip=ip_of(request),
+            detail={"role": clean_role, "by_admin": str(admin_user.id), "via": "dashboard"},
+        )
+        await session.commit()
+
+    return RedirectResponse("/admin/dashboard/users", status_code=303)
+
+
+@router.post("/dashboard/users/{user_id}/roles")
+async def admin_user_update_roles(
+    user_id: str,
+    request: Request,
+    roles: list[str] = Form(default_factory=list),
+    csrf_token: str = Form(...),
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+):
+    admin_user, err_resp = await _get_admin_user(request, session, settings)
+    if err_resp:
+        return err_resp
+
+    try:
+        target_uuid = uuid.UUID(user_id)
+    except ValueError:
+        raise HTTPException(400, "Invalid user ID")
+
+    target_user = await session.get(User, target_uuid)
+    if not target_user:
+        raise HTTPException(404, "User not found")
+
+    if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
+        return page(request, settings, "error.html", status=400, error="Invalid form token.")
+
+    selected_roles = {r.strip().lower() for r in roles if r.strip()}
+
+    if target_user.id == admin_user.id:
+        selected_roles.add(RoleName.ADMIN)
+
+    current_roles = set(await get_user_roles(session, target_user.id))
+
+    to_add = selected_roles - current_roles
+    to_remove = current_roles - selected_roles
+
+    for r in to_add:
+        await assign_role_to_user(session, target_user.id, r)
+
+    for r in to_remove:
+        await remove_role_from_user(session, target_user.id, r)
+
+    if to_add or to_remove:
+        await audit(
+            session,
+            "admin_update_roles",
+            user_id=target_user.id,
+            ip=ip_of(request),
+            detail={
+                "added": sorted(to_add),
+                "removed": sorted(to_remove),
+                "by_admin": str(admin_user.id),
+                "via": "dashboard",
+            },
+        )
+        await session.commit()
+
+    return RedirectResponse("/admin/dashboard/users", status_code=303)
+
+
 
 

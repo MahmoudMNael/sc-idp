@@ -68,8 +68,27 @@ async def oauth_context(session: AsyncSession, settings: Settings, nxt: str | No
 
 
 def after_login_target(settings: Settings, nxt: str | None) -> str:
+    if not nxt:
+        return "/account"
     query = load_next(settings, nxt)
-    return f"/authorize?{query}" if query else "/"
+    if query:
+        return f"/authorize?{query}"
+    clean = nxt.strip()
+    if clean.startswith("/") and not clean.startswith("//") and not clean.startswith("/\\"):
+        if clean in ("/", "/login") or clean.startswith("/login?"):
+            return "/account"
+        return clean
+    return "/account"
+
+
+def requires_reauth(settings: Settings, nxt: str | None) -> bool:
+    query = load_next(settings, nxt)
+    if not query:
+        return False
+    from urllib.parse import parse_qs
+
+    prompts = parse_qs(query, keep_blank_values=True).get("prompt", [""])[0].split()
+    return "login" in prompts
 
 
 def _csrf_fail(request, settings):
@@ -203,6 +222,15 @@ async def register_form(
     session: AsyncSession = db_dep,
     settings: Settings = s_dep,
 ):
+    if not requires_reauth(settings, next):
+        sess = await load_session(session, settings, request.cookies.get(settings.cookie_name))
+        if sess:
+            user = await session.get(User, sess.user_id)
+            if user and user.is_active:
+                if user.totp_enabled and "otp" not in (sess.amr or []):
+                    return RedirectResponse("/login/mfa", status_code=303)
+                dest = after_login_target(settings, next) if next else "/account"
+                return RedirectResponse(dest, status_code=303)
     client_name, cancel_url = await oauth_context(session, settings, next)
     return page(
         request,
@@ -507,6 +535,15 @@ async def login_form(
     session: AsyncSession = db_dep,
     settings: Settings = s_dep,
 ):
+    if not requires_reauth(settings, next):
+        sess = await load_session(session, settings, request.cookies.get(settings.cookie_name))
+        if sess:
+            user = await session.get(User, sess.user_id)
+            if user and user.is_active:
+                if user.totp_enabled and "otp" not in (sess.amr or []):
+                    return RedirectResponse("/login/mfa", status_code=303)
+                dest = after_login_target(settings, next) if next else "/account"
+                return RedirectResponse(dest, status_code=303)
     client_name, cancel_url = await oauth_context(session, settings, next)
     return page(
         request,
@@ -671,6 +708,8 @@ async def forgot_form(
         client_name=client_name,
         cancel_url=cancel_url,
         message=None,
+        email="",
+        error=None,
     )
 
 
@@ -687,21 +726,36 @@ async def forgot(
         return _csrf_fail(request, settings)
     email_n = email.strip().lower()
     user = (await session.execute(select(User).where(User.email == email_n))).scalar_one_or_none()
-    if user and user.is_active:
-        if await allow(session, f"pwd_otp_send:{user.id}", 3, 600):
-            await _invalidate_prior_tokens(session, user.id, "reset_password")
-            code = generate_otp(6)
-            session.add(
-                EmailToken(
-                    token_hash=hash_otp(settings.token_hash_pepper, user.id, "reset_password", code),
-                    user_id=user.id,
-                    purpose="reset_password",
-                    expires_at=datetime.now(UTC) + timedelta(seconds=settings.otp_ttl),
-                )
+    if not user or not user.is_active:
+        await audit(session, "password_reset_failure", user_id=user.id if user else None, ip=ip_of(request), detail={"reason": "user_not_found"})
+        client_name, cancel_url = await oauth_context(session, settings, next)
+        return page(
+            request,
+            settings,
+            "forgot.html",
+            status=400,
+            next=next,
+            email=email,
+            client_name=client_name,
+            cancel_url=cancel_url,
+            error="No active account found with this email.",
+            message=None,
+        )
+
+    if await allow(session, f"pwd_otp_send:{user.id}", 3, 600):
+        await _invalidate_prior_tokens(session, user.id, "reset_password")
+        code = generate_otp(6)
+        session.add(
+            EmailToken(
+                token_hash=hash_otp(settings.token_hash_pepper, user.id, "reset_password", code),
+                user_id=user.id,
+                purpose="reset_password",
+                expires_at=datetime.now(UTC) + timedelta(seconds=settings.otp_ttl),
             )
-            send_otp_forgot_password_mail(settings, email_n, code)
-            await audit(session, "password_reset_requested", user_id=user.id, ip=ip_of(request))
-    # ponytail: avoid email enumeration by redirecting to verify screen regardless
+        )
+        send_otp_forgot_password_mail(settings, email_n, code)
+        await audit(session, "password_reset_requested", user_id=user.id, ip=ip_of(request))
+
     query = {"email": email_n}
     if next:
         query["next"] = next
