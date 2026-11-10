@@ -146,9 +146,13 @@
           <button type="submit" class="secondary" style="margin-top: 1.25rem;">DISABLE MFA</button>
         </form>
       {% elif pending_uri %}
-        <div style="padding: 1rem; background: var(--surface-elevated); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 1.5rem;">
-          <p class="muted" style="margin-top: 0;">Scan this URI with your authenticator app (Google Authenticator, 1Password, etc.):</p>
-          <p style="margin-bottom: 0;"><code style="word-break: break-all; font-size: 0.775rem;">{{ pending_uri }}</code></p>
+        <div style="padding: 1.5rem; background: var(--surface-elevated); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 1.5rem; text-align: center;">
+          <p class="muted" style="margin-top: 0; margin-bottom: 1.25rem;">Scan this QR code with your authenticator app (Google Authenticator, 1Password, etc.):</p>
+          <div id="mfa-qrcode" style="display: inline-flex; justify-content: center; align-items: center; padding: 14px; background: #ffffff; border-radius: 8px; margin: 0 auto 1.25rem;"></div>
+          <div style="text-align: left; margin-top: 0.5rem; border-top: 1px solid var(--border); padding-top: 0.75rem;">
+            <p class="muted" style="font-size: 0.8rem; margin: 0 0 0.25rem;">Can't scan? Enter this URI or secret manually:</p>
+            <p style="margin: 0;"><code style="word-break: break-all; font-size: 0.75rem;">{{ pending_uri }}</code></p>
+          </div>
         </div>
 
         <form method="post" action="/account/mfa/enable">
@@ -204,4 +208,22 @@
     }
   }
 </script>
+{% if pending_uri %}
+<script src="/assets/qrcode.min.js"></script>
+<script>
+  (function() {
+    var el = document.getElementById('mfa-qrcode');
+    if (el) {
+      new QRCode(el, {
+        text: {{ pending_uri | tojson }},
+        width: 192,
+        height: 192,
+        colorDark: '#000000',
+        colorLight: '#ffffff',
+        correctLevel: QRCode.CorrectLevel.M
+      });
+    }
+  })();
+</script>
+{% endif %}
 {% endblock %}
