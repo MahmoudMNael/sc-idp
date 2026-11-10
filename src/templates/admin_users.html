@@ -14,7 +14,7 @@
   <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em; color: var(--accent); text-transform: uppercase; margin-bottom: 0.4rem; font-weight: 600;">IDP ADMINISTRATION</div>
   <h1>USER ACCOUNTS</h1>
   <p class="muted" style="margin-top: -0.5rem; margin-bottom: 1.5rem; max-width: 760px;">
-    View registered users, identities, and assigned roles. Administrative password reset is permitted for accounts with the <code>sc_member</code> role.
+    View registered users, identities, and role assignments. Administrators can assign or revoke roles for any user and perform direct password resets for members and administrators.
   </p>
 </div>
 
@@ -69,7 +69,7 @@
       <tbody>
         {% for u in users %}
         {% set roles = user_roles_map.get(u.id, []) %}
-        {% set is_sc_member = 'sc_member' in roles %}
+        {% set can_reset_password = ('sc_member' in roles) or ('admin' in roles) %}
         <tr>
           <td>
             <div style="font-weight: 600; color: var(--text);">
@@ -117,13 +117,18 @@
             </span>
           </td>
           <td style="text-align: right; white-space: nowrap;">
-            {% if is_sc_member %}
-              <button type="button" class="btn sm secondary" style="border-color: #6b1419; color: var(--accent);" onclick="openResetModal('{{ u.id }}', '{{ u.email }}')">
-                Reset Password
+            <div style="display: inline-flex; align-items: center; gap: 0.5rem;">
+              <button type="button" class="btn sm secondary" onclick="openRolesModal('{{ u.id }}', '{{ u.email }}', {{ roles|tojson }})">
+                Roles
               </button>
-            {% else %}
-              <span class="muted" style="font-size: 0.775rem;" title="Password reset is restricted to sc_member role accounts">—</span>
-            {% endif %}
+              {% if can_reset_password %}
+                <button type="button" class="btn sm secondary" style="border-color: #6b1419; color: var(--accent);" onclick="openResetModal('{{ u.id }}', '{{ u.email }}')">
+                  Reset Password
+                </button>
+              {% else %}
+                <span class="muted" style="font-size: 0.775rem;" title="Password reset is restricted to members and admins">—</span>
+              {% endif %}
+            </div>
           </td>
         </tr>
         {% endfor %}
@@ -135,6 +140,37 @@
   {% endif %}
 </div>
 
+<!-- Manage Roles Modal -->
+<dialog id="manageRolesModal" style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; color: var(--text); padding: 2rem; max-width: 480px; width: 90%; box-shadow: 0 16px 40px rgba(0,0,0,0.8);">
+  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
+    <h2 style="margin: 0;">MANAGE ROLES</h2>
+    <button type="button" class="btn sm secondary" onclick="closeRolesModal()" style="padding: 0.2rem 0.5rem; height: auto;">✕</button>
+  </div>
+  <p class="muted" style="font-size: 0.85rem; margin-top: 0; margin-bottom: 1.5rem;">
+    Assign or revoke roles for <strong id="roleModalUserEmail" style="color: #FFFFFF; font-family: var(--font-mono);"></strong>.
+  </p>
+
+  <div style="margin-bottom: 1.5rem;">
+    <label style="margin-top: 0; margin-bottom: 0.5rem;">Current Assigned Roles</label>
+    <div id="roleListContainer" style="display: flex; flex-direction: column; gap: 0.5rem;">
+      <!-- Populated via JS -->
+    </div>
+  </div>
+
+  <div style="border-top: 1px solid var(--border); padding-top: 1.25rem;">
+    <label for="assignRoleSelect" style="margin-top: 0; margin-bottom: 0.5rem;">Assign Role</label>
+    <form id="assignRoleForm" method="post" action="" style="display: flex; gap: 0.5rem; align-items: center; margin: 0;">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <select id="assignRoleSelect" name="role_name" required style="height: 40px; font-size: 0.875rem;">
+        {% for r in all_roles %}
+          <option value="{{ r.name }}">{{ r.name }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn sm" style="height: 40px; white-space: nowrap;">Assign</button>
+    </form>
+  </div>
+</dialog>
+
 <!-- Reset Password Modal -->
 <dialog id="resetPasswordModal" style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; color: var(--text); padding: 2rem; max-width: 480px; width: 90%; box-shadow: 0 16px 40px rgba(0,0,0,0.8);">
   <form id="resetPasswordForm" method="post" action="" onsubmit="return handleResetSubmit(event)">
@@ -143,7 +179,7 @@
     <h2 style="margin-top: 0; margin-bottom: 0.5rem;">RESET PASSWORD</h2>
     <p class="muted" style="font-size: 0.85rem; margin-top: 0; margin-bottom: 1.5rem;">
       Direct password reset for <strong id="modalUserEmail" style="color: #FFFFFF; font-family: var(--font-mono);"></strong>.
-      This immediately updates the password and revokes any active sessions for this member.
+      This immediately updates the password and revokes any active sessions for this account.
     </p>
 
     <div style="margin-bottom: 1.25rem;">
@@ -236,6 +272,69 @@
     }
 
     return true;
+  }
+
+  function openRolesModal(userId, email, roles) {
+    var modal = document.getElementById('manageRolesModal');
+    var emailSpan = document.getElementById('roleModalUserEmail');
+    var listContainer = document.getElementById('roleListContainer');
+    var assignForm = document.getElementById('assignRoleForm');
+
+    emailSpan.innerText = email;
+    assignForm.action = '/admin/dashboard/users/' + encodeURIComponent(userId) + '/roles/assign';
+
+    listContainer.innerHTML = '';
+    if (!roles || roles.length === 0) {
+      listContainer.innerHTML = '<span class="muted" style="font-size: 0.8rem;">No roles currently assigned.</span>';
+    } else {
+      roles.forEach(function(r) {
+        var row = document.createElement('div');
+        row.style.cssText = 'display: flex; align-items: center; justify-content: space-between; background: var(--surface-elevated); padding: 0.4rem 0.75rem; border-radius: 8px; border: 1px solid var(--border);';
+
+        var badgeSpan = document.createElement('span');
+        badgeSpan.className = r === 'admin' ? 'badge badge-accent' : (r === 'sc_member' ? 'badge badge-success' : 'badge badge-muted');
+        badgeSpan.innerText = r;
+
+        var removeForm = document.createElement('form');
+        removeForm.method = 'post';
+        removeForm.action = '/admin/dashboard/users/' + encodeURIComponent(userId) + '/roles/remove';
+        removeForm.style.margin = '0';
+        removeForm.onsubmit = function() {
+          return confirm('Revoke role "' + r + '" from user "' + email + '"?');
+        };
+
+        var csrfInput = document.createElement('input');
+        csrfInput.type = 'hidden';
+        csrfInput.name = 'csrf_token';
+        csrfInput.value = '{{ csrf }}';
+
+        var roleInput = document.createElement('input');
+        roleInput.type = 'hidden';
+        roleInput.name = 'role_name';
+        roleInput.value = r;
+
+        var removeBtn = document.createElement('button');
+        removeBtn.type = 'submit';
+        removeBtn.className = 'btn sm secondary';
+        removeBtn.style.cssText = 'height: 28px; padding: 0 0.5rem; font-size: 0.7rem; border-color: #5a1417; color: #ff6b72;';
+        removeBtn.innerText = 'Revoke';
+
+        removeForm.appendChild(csrfInput);
+        removeForm.appendChild(roleInput);
+        removeForm.appendChild(removeBtn);
+
+        row.appendChild(badgeSpan);
+        row.appendChild(removeForm);
+        listContainer.appendChild(row);
+      });
+    }
+
+    modal.showModal();
+  }
+
+  function closeRolesModal() {
+    var modal = document.getElementById('manageRolesModal');
+    modal.close();
   }
 </script>
 {% endblock %}

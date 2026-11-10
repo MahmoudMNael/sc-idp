@@ -1195,6 +1195,76 @@ def main() -> None:
             follow_redirects=False,
         )
 
+        users_page2 = c.get("/admin/dashboard/users")
+        vip_uid = c.get(f"/admin/roles/assignments?email={vip_email}", headers=admin).json()["user_id"]
+
+        # Password reset works for admin accounts as well (and revokes their existing session)
+        admin_new_pass = "admin-secret-new-pwd-789"
+        reset_admin_ok = c.post(
+            f"/admin/dashboard/users/{vip_uid}/reset-password",
+            data={
+                "new_password": admin_new_pass,
+                "confirm_password": admin_new_pass,
+                "csrf_token": csrf_token(users_page2.text),
+            },
+        )
+        assert reset_admin_ok.status_code == 200
+        assert f"Password for {vip_email} was reset successfully" in reset_admin_ok.text
+
+        # Re-login with the new admin password
+        admin_relogin = c.post(
+            "/login",
+            data={"email": vip_email, "password": admin_new_pass, "csrf_token": csrf_token(c.get("/login").text)},
+            follow_redirects=False,
+        )
+        assert admin_relogin.status_code == 303
+
+        # Test Assign Role via Dashboard to regular user (normal_uid)
+        users_page3 = c.get("/admin/dashboard/users")
+        assign_resp = c.post(
+            f"/admin/dashboard/users/{normal_uid}/roles/assign",
+            data={"role_name": "sc_member", "csrf_token": csrf_token(users_page3.text)},
+            follow_redirects=False,
+        )
+        assert assign_resp.status_code == 303, f"Assign resp got {assign_resp.status_code}: {assign_resp.text}"
+        norm_assigns = c.get(f"/admin/roles/assignments?email={email}", headers=admin).json()
+        assert "sc_member" in norm_assigns["user_roles"], f"norm_assigns: {norm_assigns}, assign_resp={assign_resp.headers}"
+
+        # Now normal_uid has sc_member, so password reset is now allowed for them
+        users_page4 = c.get("/admin/dashboard/users")
+        reset_promoted_ok = c.post(
+            f"/admin/dashboard/users/{normal_uid}/reset-password",
+            data={
+                "new_password": "promoted-user-pass-123",
+                "confirm_password": "promoted-user-pass-123",
+                "csrf_token": csrf_token(users_page4.text),
+            },
+        )
+        assert reset_promoted_ok.status_code == 200
+
+        # Test Remove Role via Dashboard from normal_uid
+        users_page5 = c.get("/admin/dashboard/users")
+        remove_resp = c.post(
+            f"/admin/dashboard/users/{normal_uid}/roles/remove",
+            data={"role_name": "sc_member", "csrf_token": csrf_token(users_page5.text)},
+            follow_redirects=False,
+        )
+        assert remove_resp.status_code == 303
+        norm_after_remove = c.get(f"/admin/roles/assignments?email={email}", headers=admin).json()
+        assert "sc_member" not in norm_after_remove["user_roles"]
+
+        # Test prevent removing admin role from own account
+        users_page6 = c.get("/admin/dashboard/users")
+        self_remove_resp = c.post(
+            f"/admin/dashboard/users/{vip_uid}/roles/remove",
+            data={"role_name": "admin", "csrf_token": csrf_token(users_page6.text)},
+        )
+        assert self_remove_resp.status_code == 400
+        assert "cannot remove the admin role from your own account" in self_remove_resp.text
+
+        # Keep password variable updated for vip_email for downstream test steps
+        password = admin_new_pass
+
         # Test OAuth PKCE flow with this newly registered client
         new_code, new_verifier = login_and_code(
             new_cid,
