@@ -1552,6 +1552,19 @@ def main() -> None:
         c.cookies.set(settings.cookie_name, active_sess_cookie, domain="testserver.local")
         assert c.get("/account", follow_redirects=False).status_code == 302
 
+        # Test active session guard on /login and /register
+        c.cookies.clear()
+        lp = c.get("/login")
+        c.post(
+            "/login",
+            data={"email": vip_email, "password": final_pass, "csrf_token": csrf_token(lp.text)},
+            follow_redirects=False,
+        )
+        assert c.get("/login", follow_redirects=False).status_code == 303
+        assert c.get("/login", follow_redirects=False).headers["location"] == "/account"
+        assert c.get("/register", follow_redirects=False).status_code == 303
+        assert c.get("/register", follow_redirects=False).headers["location"] == "/account"
+
     print("ok")
 
 
