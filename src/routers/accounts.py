@@ -223,18 +223,20 @@ async def home(
 async def register_form(
     request: Request,
     next: str = "",
+    switch_account: str = "",
     session: AsyncSession = db_dep,
     settings: Settings = s_dep,
 ):
-    if not requires_reauth(settings, next):
+    is_switch = switch_account == "1" or request.query_params.get("switch_account") == "1"
+    # ponytail: only bounce to /account if user is authenticated and not switching or authorizing for a client.
+    if not is_switch and not next and not requires_reauth(settings, next):
         sess = await load_session(session, settings, request.cookies.get(settings.cookie_name))
         if sess:
             user = await session.get(User, sess.user_id)
             if user and user.is_active:
                 if user.totp_enabled and "otp" not in (sess.amr or []):
                     return RedirectResponse("/login/mfa", status_code=303)
-                dest = after_login_target(settings, next) if next else "/account"
-                return RedirectResponse(dest, status_code=303)
+                return RedirectResponse("/account", status_code=303)
     client_name, cancel_url = await oauth_context(session, settings, next)
     return page(
         request,
@@ -247,6 +249,7 @@ async def register_form(
         client_name=client_name,
         cancel_url=cancel_url,
         error=None,
+        is_switch=is_switch,
     )
 
 

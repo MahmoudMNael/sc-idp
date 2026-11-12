@@ -315,3 +315,88 @@ def test_third_party_client_shows_consent_after_account_confirm():
         assert "code=" in allow_res.headers["location"]
         assert "state=state3p" in allow_res.headers["location"]
 
+
+def test_register_accessible_when_switching_accounts_with_active_session():
+    with TestClient(app) as client:
+        settings = get_settings()
+
+        async def setup():
+            import src.core.db as db_mod
+            async with db_mod.SessionLocal() as s:
+                cid = f"test-client-reg-{uuid.uuid4().hex[:8]}"
+                cl = OAuthClient(
+                    client_id=cid,
+                    client_secret_hash=hash_token(settings.token_hash_pepper, "secret"),
+                    name="Register App",
+                    redirect_uris=["http://registerapp.test/cb"],
+                    allowed_scopes=["openid", "profile", "email"],
+                    is_first_party=True,
+                    is_active=True,
+                )
+                s.add(cl)
+                u = User(
+                    id=uuid.uuid4(),
+                    email=f"existing-{uuid.uuid4().hex[:8]}@example.test",
+                    password_hash=hash_password(settings, "Password123!"),
+                    first_name="Active",
+                    last_name="User",
+                    email_verified=True,
+                    is_active=True,
+                )
+                s.add(u)
+                await s.commit()
+
+                raw = await create_session(s, settings, u, ["pwd"], ip="127.0.0.1", user_agent="test")
+                await s.commit()
+                return cl.client_id, u.email, raw
+
+        client_id, existing_email, raw_sess = client.portal.call(setup)
+        client.cookies.set(settings.cookie_name, raw_sess)
+
+        verifier = random_token(32)
+        challenge = pkce_s256(verifier)
+
+        # 1. Authorize displays account chooser
+        res = client.get(
+            "/authorize",
+            params={
+                "client_id": client_id,
+                "redirect_uri": "http://registerapp.test/cb",
+                "response_type": "code",
+                "scope": "openid email",
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+            },
+            follow_redirects=False,
+        )
+        assert res.status_code == 200
+        assert "Choose an Account" in res.text
+
+        m_next = re.search(r'name=["\']next["\']\s+value=["\']([^"\']+)["\']', res.text)
+        assert m_next
+        nxt = m_next.group(1)
+
+        # 2. Click "Use a different account" -> login page
+        login_page = client.get(f"/login?next={nxt}&switch_account=1", follow_redirects=False)
+        assert login_page.status_code == 200
+        assert "Switch Account" in login_page.text
+
+        # 3. Check "Don't have an account? Create one" link includes next and switch_account=1
+        m_reg_link = re.search(r'href="([^"]*register[^"]*)"', login_page.text)
+        assert m_reg_link
+        reg_href = m_reg_link.group(1)
+        assert "switch_account=1" in reg_href
+        assert f"next={nxt}" in reg_href
+
+        # 4. Access /register with active session -> MUST render registration form (not redirect!)
+        reg_page = client.get(reg_href, follow_redirects=False)
+        assert reg_page.status_code == 200
+        assert "Register" in reg_page.text
+        assert "Register App" in reg_page.text
+
+        # 5. Verify plain /register without params still redirects active session to /account
+        plain_reg = client.get("/register", follow_redirects=False)
+        assert plain_reg.status_code == 303
+        assert plain_reg.headers["location"] == "/account"
+
+
