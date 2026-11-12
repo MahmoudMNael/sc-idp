@@ -80,7 +80,7 @@ sequenceDiagram
 
 ---
 
-## 3. OAuth Authorize & Cancellation
+## 3. OAuth Authorize, Account Confirmation & Cancellation
 
 Relying parties initiate the authorization code flow by redirecting the user to `GET /authorize`.
 
@@ -97,7 +97,22 @@ sequenceDiagram
   alt User not authenticated
     IdP-->>User: 302 Redirect to /login?next=<signed_authorize_query>
     User->>IdP: Login / Register / MFA
-    IdP-->>User: 303 Redirect back to /authorize?...
+    IdP-->>User: 303 Redirect back to /authorize?...&confirmed=<ticket>
+  else Active session exists
+    opt Unconfirmed and prompt != none
+      IdP-->>User: 200 Account Selection Screen (Choose an Account)
+      alt User clicks active account card
+        User->>IdP: POST /authorize/confirm (csrf, next)
+      else User clicks "Use a different account"
+        User->>IdP: GET /login?next=<next>&switch_account=1
+        User->>IdP: POST /login (credentials for User B)
+        Note over IdP: Cookie switched to User B; User A session in DB is NOT revoked.<br/>Mints signed confirmed ticket.
+        IdP-->>User: 303 Redirect to /authorize?...&confirmed=<ticket>
+      else User clicks "Cancel"
+        User->>IdP: GET /cancel?next=<signed_authorize_query>
+        IdP-->>User: 302 Redirect to RP redirect_uri?error=access_denied&state=...
+      end
+    end
   end
   alt Third-party client or prompt=consent
     IdP-->>User: 200 Consent screen (Allow / Cancel)
@@ -111,8 +126,17 @@ sequenceDiagram
   IdP-->>User: 302 Redirect to RP redirect_uri?code=...&state=...
 ```
 
+### Account Confirmation & Seamless Switching
+When an active browser session exists on `/authorize`, `sc-idp` displays a dedicated account selection screen (`account_confirm.html`) before issuing tokens:
+- **Interactive Account Card**: Displays an avatar initial, user's full name, and email address in a high-contrast card with hover elevation. Clicking the card immediately selects the active account and submits `POST /authorize/confirm`.
+- **Use a Different Account**: Navigates to `/login?next={next}&switch_account=1`. The login page renders with a contextual switch prompt without auto-redirecting. When signing into the new account:
+  - The browser session cookie (`idp_session`) is updated to the new user.
+  - The previous user's session record in `auth_sessions` is **not revoked** (retaining active sessions across other devices and client apps).
+  - A signed `confirmed` ticket is appended to the redirect back to `/authorize`, ensuring the newly authenticated account seamlessly proceeds without re-prompting.
+- **Silent SSO (`prompt=none`)**: Requests passing `prompt=none` bypass the account chooser entirely, enabling background token renewal without human interaction.
+
 ### Cancellation Endpoint (`/cancel`)
-Every IdP authentication page (login, registration, forgot-password, reset-password, and consent) includes a **Cancel** link when an authorization query is in progress.
+Every IdP authentication page (account selection, login, registration, forgot-password, reset-password, and consent) includes a **Cancel** link when an authorization query is in progress.
 - The signed `next` parameter is unpacked and validated.
 - If valid and the client's `redirect_uri` matches, the browser is redirected to `{redirect_uri}?error=access_denied&state={state}`.
 - If invalid or expired, the user is safely redirected to the IdP home page (`/`).
@@ -163,5 +187,6 @@ The browser session cookie (`idp_session`) enables Single Sign-On across multipl
 | Idle Timeout | `SESSION_IDLE_TTL` | 12 hours (`43200s`) | Sliding window refreshed on active access |
 | Absolute Timeout | `SESSION_ABSOLUTE_TTL` | 7 days (`604800s`) | Hard cap on continuous session lifetime |
 
-### Session Fixation Defense
-On every password verification, MFA elevation, and logout, the previous session row is revoked and a completely new random session token is minted.
+### Session Fixation Defense & Account Switching
+- **Same-User Re-authentication**: On every password re-verification, MFA step-up, and logout for the current user, the previous session row is revoked and a completely new random session token is minted.
+- **Account Switching (Approach B)**: When switching to a different user via `/login?switch_account=1`, the browser cookie is pointed to the new user's newly minted session, but the previous user's session in `auth_sessions` is **not revoked**. This ensures existing tokens, refresh cycles, and sessions on other clients and devices remain active without disruption.
