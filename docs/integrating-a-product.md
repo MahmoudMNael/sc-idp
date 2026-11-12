@@ -45,6 +45,9 @@ sequenceDiagram
   alt No valid IdP session
     IdP-->>User: Render IdP login / register / OTP form
     User->>IdP: Authenticate & verify OTP
+  else Active IdP session exists (prompt != none)
+    IdP-->>User: Render Account Selection screen ("Choose an Account")
+    User->>IdP: Confirm active account or switch account
   end
   alt User cancels flow
     User->>IdP: Click Cancel (/cancel?next=...)
@@ -115,7 +118,11 @@ GET {issuer}/authorize?
 - `code_challenge_method` (string, required): Must be `S256`.
 - `state` (string, required in practice): CSRF token validated by your callback handler.
 - `nonce` (string, recommended): Cryptographic binding echoed in the ID token.
-- `prompt` (string, optional): `none`, `login`, or `consent`.
+- `prompt` (string, optional): Space-delimited prompt instructions (`none`, `login`, `consent`):
+  - `none`: Enforces silent SSO. Never displays an account chooser, login form, or consent UI; immediately returns an error (`login_required`, `consent_required`) if interaction is needed.
+  - `login`: Forces End-User re-authentication, ignoring any existing session cookie.
+  - `consent`: Forces display of the permissions consent screen before returning an authorization code.
+  - *(Default)*: When `prompt` is omitted and an active session exists, the IdP presents an interactive **Account Selection** screen ("Choose an Account") allowing the user to confirm their identity or switch accounts.
 - `max_age` (integer, optional): Forces re-authentication if the IdP session is older than `max_age` seconds.
 
 #### Error Redirection & Cancellation

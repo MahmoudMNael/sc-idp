@@ -100,7 +100,8 @@ async def mfa_submit(
         replace=sess,
     )
     await audit(session, "mfa_success", user_id=user.id, ip=ip_of(request))
-    response = RedirectResponse(after_login_target(settings, next), status_code=303)
+    dest = after_login_target(settings, next, confirmed_user_id=str(user.id))
+    response = RedirectResponse(dest, status_code=303)
     set_session_cookie(response, settings, raw)
     return response
 

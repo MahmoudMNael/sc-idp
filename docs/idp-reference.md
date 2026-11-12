@@ -36,6 +36,7 @@ This document covers the architectural theory, design decisions, and system impl
 | `GET` | `/.well-known/oauth-authorization-server` | RFC 8414 OAuth authorization server metadata |
 | `GET` | `/.well-known/jwks.json`, `/.well-known/jwks` | Public RSA signing keys (includes retiring keys) |
 | `GET` | `/authorize` | Starts login/SSO; verifies client and exact redirect URI before any 302 |
+| `POST` | `/authorize/confirm` | Confirms active account selection on account chooser screen |
 | `GET` | `/cancel` | Cancels authorization flow; redirects to client `redirect_uri` with `error=access_denied` |
 | `POST` | `/consent` | Third-party consent screen submission (Allow / Deny) |
 | `POST` | `/token` | Exchanges authorization code or rotates refresh token |

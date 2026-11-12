@@ -16,7 +16,8 @@ Related docs: [IdP Technical Reference](idp-reference.md) · [Architecture](arch
 - **Argon2id for Passwords**: Salted, memory-hard hashing (`time_cost=3`, `memory_cost=65536`, `parallelism=1`). Unknown usernames and locked accounts trigger a dummy Argon2 computation to prevent timing attacks.
 - **HMAC-SHA256 for Tokens**: Authorization codes, refresh tokens, session tokens, client secrets, recovery codes, and 6-digit OTPs are hashed using HMAC-SHA256 with a server-side pepper (`TOKEN_HASH_PEPPER`).
 - **Cryptographic Encryption at Rest**: RSA private signing keys and TOTP secrets are Fernet-encrypted with an encryption key derived via HKDF from `KEY_ENCRYPTION_KEY`.
-- **Session Security**: `idp_session` cookie is marked `HttpOnly`, `SameSite=Lax`, and `Secure` (in production). Session fixation protection rotates the session token on password verification and MFA elevation.
+- **Session Security & Account Switching**: `idp_session` cookie is marked `HttpOnly`, `SameSite=Lax`, and `Secure` (in production). Session fixation protection rotates the session token on password verification and MFA elevation for the same user. When switching accounts via `/login?switch_account=1`, the browser cookie is pointed to the new user without revoking the previous user's session record in `auth_sessions`, maintaining valid sessions across other clients and devices.
+- **Signed Confirmation Tickets**: Short-lived (300s) cryptographically signed `confirmed` tickets (`itsdangerous`) ensure fresh logins and card confirmations are securely bound to the authenticated subject, preventing parameter spoofing or authorization race conditions.
 - **Rate Limiting & Lockout**: Network-level rate limiting on login, registration, token exchange, and OTP operations. User account lockout is triggered after `LOGIN_MAX_FAILURES` wrong password attempts.
 - **Admin Access Isolation**:
   - Web Admin Dashboard: strictly requires an active browser session with the `admin` role in `user_idp_roles` and double-submit CSRF validation.
@@ -46,6 +47,8 @@ Combined with a 10-minute expiration, 5-attempt rate limits per user (`otp_attem
 | **Stolen IdP refresh token** | Token rotation on every use. Replay of an already-used token triggers immediate revocation of the entire refresh family (`refresh_reuse`). |
 | **Stolen product refresh token** | Isolated to that specific product. The product revokes its own local family; the IdP and other products remain unaffected. |
 | **Stolen browser session cookie** | Bound by idle (`SESSION_IDLE_TTL`) and absolute (`SESSION_ABSOLUTE_TTL`) timeouts. MFA step-up required if TOTP is enabled. Rotated on login and privilege change. |
+| **Accidental Account Misattribution** | Interactive account confirmation card on `/authorize` prompts the user to explicitly confirm their identity or switch accounts before code issuance. |
+| **Chooser Bypass / Parameter Spoofing** | Short-lived (300s) cryptographically signed `confirmed` tickets (`itsdangerous`) bind authorization directly to the authenticated user ID. |
 | **Cross-Site Scripting (XSS) on Product** | Attackers can steal product access tokens but cannot access the IdP session cookie due to browser host-scoping and `HttpOnly` flags. |
 | **Open redirect via `/authorize`** | Unregistered `redirect_uri` never triggers a redirect; renders an IdP error page. |
 | **Timing attack on login** | Constant-time dummy Argon2 hash computation runs on unknown emails and locked accounts. Generic `Invalid email or password` message used universally. |

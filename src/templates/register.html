@@ -57,7 +57,7 @@
 
     <div class="auth-footer">
       <div>
-        <a href="/login{% if next %}?next={{ next }}{% endif %}">Already have an account? Sign in</a>
+        <a href="/login{% if next or is_switch %}?{% endif %}{% if next %}next={{ next }}{% if is_switch %}&{% endif %}{% endif %}{% if is_switch %}switch_account=1{% endif %}">Already have an account? Sign in</a>
       </div>
       {% if cancel_url %}
         <a href="{{ cancel_url }}" class="auth-cancel">Cancel and return to {{ client_name }}</a>
