@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+import uuid
+from datetime import UTC, datetime, timedelta
 from joserfc import jwt
 from joserfc.jwk import RSAKey, KeySet
 from fastapi.testclient import TestClient
@@ -8,7 +9,8 @@ from src.main import app
 from src.core.oauth_errors import append_query
 from src.core.keys import signing_key
 from src.core.settings import get_settings
-from src.models import OAuthClient
+from src.core.crypto import hash_token
+from src.models import OAuthClient, RefreshToken, User
 from src.routers.logout import _is_post_logout_redirect_allowed, _normalize_uri
 from src.services.tokens import mint_idp_jwt
 
@@ -37,59 +39,71 @@ def test_is_post_logout_redirect_allowed():
     assert _is_post_logout_redirect_allowed("http://localhost:4200", []) is False
 
 
-def test_logout_endpoint_fallback():
+def test_direct_idp_logout():
     with TestClient(app) as client:
-        # Visiting logout with no params displays signed out page
+        # Direct IdP logout with no params displays signed out page and clears cookie
         res = client.get("/logout", follow_redirects=False)
         assert res.status_code == 200
         assert "Signed Out" in res.text
+        assert 'idp_session=""' in res.headers.get("set-cookie", "")
 
-        # Visiting logout with unknown post_logout_redirect_uri falls back to signed out page
-        res2 = client.get(
+
+def test_client_logout_invalid_redirect_uri():
+    with TestClient(app) as client:
+        # Client logout with unknown post_logout_redirect_uri returns 400 error page without clearing session cookie
+        res = client.get(
             "/logout",
             params={"post_logout_redirect_uri": "http://evil.com", "client_id": "nonexistent"},
             follow_redirects=False,
         )
-        assert res2.status_code == 200
-        assert "Signed Out" in res2.text
+        assert res.status_code == 400
+        assert "Invalid post-logout redirect URI." in res.text
+        # Cookie is NOT cleared
+        assert 'idp_session=""' not in res.headers.get("set-cookie", "")
 
 
-def test_logout_redirect_with_trailing_slash_mismatch():
+def test_client_logout_decoupled_from_idp_session():
     with TestClient(app) as client:
-        # Find any client in db
-        async def get_test_client():
+        async def setup_data():
             import src.core.db as db_mod
             async with db_mod.SessionLocal() as s:
                 cl = (await s.execute(select(OAuthClient).where(OAuthClient.post_logout_redirect_uris.is_not(None)))).scalars().first()
-                if cl and cl.post_logout_redirect_uris:
-                    key = await signing_key(s, get_settings())
-                    return cl.client_id, cl.post_logout_redirect_uris[0], key
-                return None, None, None
+                if not cl or not cl.post_logout_redirect_uris:
+                    return None, None, None, None
 
-        cid, reg_uri, key = client.portal.call(get_test_client)
+                # Find or create a user and refresh token
+                u = (await s.execute(select(User))).scalars().first()
+                if not u:
+                    return None, None, None, None
+
+                test_user_id = u.id
+                now = datetime.now(UTC)
+                rt = RefreshToken(
+                    token_hash=hash_token(get_settings().token_hash_pepper, f"test_rt_{now.timestamp()}"),
+                    family_id=uuid.uuid4(),
+                    user_id=test_user_id,
+                    client_id=cl.client_id,
+                    scope="openid",
+                    auth_time=now,
+                    amr=["pwd"],
+                    expires_at=now + timedelta(days=1),
+                    family_expires_at=now + timedelta(days=7),
+                )
+                s.add(rt)
+                await s.commit()
+
+                key = await signing_key(s, get_settings())
+                return cl.client_id, cl.post_logout_redirect_uris[0], key, test_user_id
+
+        cid, reg_uri, key, uid = client.portal.call(setup_data)
         if not cid:
             return
 
-        # If registered has slash, request without slash (or vice versa)
-        if reg_uri.endswith("/"):
-            req_uri = reg_uri.rstrip("/")
-        else:
-            req_uri = reg_uri + "/"
+        req_uri = reg_uri.rstrip("/") if reg_uri.endswith("/") else reg_uri + "/"
 
-        # 1. Test redirect using client_id
-        res = client.get(
-            "/logout",
-            params={"client_id": cid, "post_logout_redirect_uri": req_uri, "state": "xyz123"},
-            follow_redirects=False,
-        )
-        assert res.status_code == 302
-        assert res.headers["location"].startswith(req_uri)
-        assert "state=xyz123" in res.headers["location"]
-
-        # 2. Test redirect using id_token_hint
         id_token = mint_idp_jwt({
             "iss": get_settings().public_base,
-            "sub": "test-user",
+            "sub": str(uid),
             "aud": cid,
             "exp": 9999999999,
             "iat": 1000000000,
@@ -97,19 +111,33 @@ def test_logout_redirect_with_trailing_slash_mismatch():
             "amr": ["pwd"],
             "at_hash": "dummy",
         }, key)
-        res_hint = client.get(
-            "/logout",
-            params={"id_token_hint": id_token, "post_logout_redirect_uri": req_uri},
-            follow_redirects=False,
-        )
-        assert res_hint.status_code == 302
-        assert res_hint.headers["location"] == req_uri
 
-        # 3. Test POST /logout
-        res_post = client.post(
+        # Perform client logout
+        res = client.get(
             "/logout",
-            data={"id_token_hint": id_token, "post_logout_redirect_uri": req_uri},
+            params={"id_token_hint": id_token, "post_logout_redirect_uri": req_uri, "state": "state123"},
             follow_redirects=False,
         )
-        assert res_post.status_code == 302
-        assert res_post.headers["location"] == req_uri
+        # 1. Must redirect 302
+        assert res.status_code == 302
+        assert res.headers["location"].startswith(req_uri)
+        assert "state=state123" in res.headers["location"]
+
+        # 2. Must NOT clear idp_session cookie
+        assert 'idp_session=""' not in res.headers.get("set-cookie", "")
+
+        # 3. Must have revoked the user's refresh token for this client
+        async def verify_rt_revoked():
+            import src.core.db as db_mod
+            async with db_mod.SessionLocal() as s:
+                rts = (await s.execute(
+                    select(RefreshToken).where(
+                        RefreshToken.client_id == cid,
+                        RefreshToken.user_id == uid,
+                    )
+                )).scalars().all()
+                for r in rts:
+                    assert r.revoked_at is not None
+                    assert r.revoked_reason == "client_logout"
+
+        client.portal.call(verify_rt_revoked)
