@@ -64,8 +64,12 @@ sequenceDiagram
 
   User->>AppB: Access appb.com (no product session)
   AppB->>IdP: 302 Redirect to /authorize
-  alt IdP session exists
-    IdP-->>AppB: 302 Redirect to appb.com/callback with authorization code (no prompt)
+  alt IdP session exists (prompt=none)
+    IdP-->>AppB: 302 Redirect to appb.com/callback with authorization code (silent SSO)
+  else IdP session exists (interactive)
+    IdP-->>User: 200 Account Selection ("Choose an Account")
+    User->>IdP: Confirm active account (or switch to different account)
+    IdP-->>AppB: 302 Redirect to appb.com/callback with authorization code
   else No IdP session
     IdP-->>User: Render login form
     User->>IdP: Submit credentials & OTP

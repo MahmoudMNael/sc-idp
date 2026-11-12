@@ -10,7 +10,7 @@ Central OpenID Connect provider: **who the user is**. Products decide **what the
 | --- | --- |
 | [Product Integration](docs/integrating-a-product.md) | OIDC wire protocol, tokens, scopes, claims, and redirect contracts |
 | [IdP Technical Reference](docs/idp-reference.md) | Subsystem architecture, database schema, tokens, and theory |
-| [Authentication & User Flows](docs/flows.md) | 6-digit OTP verification, password reset, MFA step-up, cancellation, and silent SSO |
+| [Authentication & User Flows](docs/flows.md) | 6-digit OTP verification, password reset, account confirmation & switching, MFA step-up, cancellation, and silent SSO |
 | [Admin Guide & Dashboard](docs/admin-guide.md) | Web Admin Dashboard (`/admin/dashboard`), REST admin API, client secrets, and role assignments |
 | [Architecture](docs/architecture.md) | Token layer split, two-tier role architecture, and silent SSO mechanics |
 | [Security](docs/security.md) | Threat model, non-negotiables, token hashing, and rate limiting |

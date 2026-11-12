@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}Choose an account{% endblock %}
+{% block header %}{% endblock %}
+{% block content %}
+<main class="auth-viewport">
+  <div class="auth-card">
+    <a href="/"><img src="/assets/logo-dark.png" alt="Short Circuit" class="auth-logo"></a>
+    <h1 class="auth-title">Choose an Account</h1>
+    <p class="auth-subtitle">
+      to continue to <span class="auth-client-target">{{ client_name }}</span>
+    </p>
+
+    <!-- Clickable active user row card -->
+    <form method="post" action="/authorize/confirm" style="margin: 0; padding: 0;">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="next" value="{{ next }}">
+      <button type="submit" class="account-card-btn" aria-label="Continue as {{ user_display_name }}">
+        <div class="account-card-avatar">
+          {{ user_initial }}
+        </div>
+        <div class="account-card-info">
+          <div class="account-card-name">{{ user_display_name }}</div>
+          <div class="account-card-email">{{ user_email }}</div>
+        </div>
+        <svg class="account-card-chevron" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m9 18 6-6-6-6"/>
+        </svg>
+      </button>
+    </form>
+
+    <!-- Actions below -->
+    <a href="/login?next={{ next }}&switch_account=1" class="btn secondary btn-block" style="margin-top: 1.25rem;">
+      Use a different account
+    </a>
+
+    {% if cancel_url %}
+      <a href="{{ cancel_url }}" class="btn secondary btn-block" style="margin-top: 0.6rem; color: var(--text-muted);">
+        Cancel
+      </a>
+    {% endif %}
+  </div>
+</main>
+
+<style>
+  .account-card-btn {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    padding: 0.85rem 1rem;
+    height: auto;
+    background: var(--surface-elevated);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    cursor: pointer;
+    text-align: left;
+    text-transform: none;
+    letter-spacing: normal;
+    font-weight: normal;
+    color: var(--text);
+    transition: background 150ms ease, border-color 150ms ease, transform 150ms ease;
+  }
+  .account-card-btn:hover {
+    background: #202020;
+    border-color: var(--border-hover);
+    transform: translateY(-1px);
+  }
+  .account-card-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    font-weight: 600;
+    flex-shrink: 0;
+    text-transform: uppercase;
+  }
+  .account-card-info {
+    flex: 1;
+    min-width: 0;
+  }
+  .account-card-name {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .account-card-email {
+    font-size: 0.825rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 0.1rem;
+  }
+  .account-card-chevron {
+    color: var(--text-disabled);
+    flex-shrink: 0;
+    transition: color 150ms ease, transform 150ms ease;
+  }
+  .account-card-btn:hover .account-card-chevron {
+    color: var(--text);
+    transform: translateX(2px);
+  }
+</style>
+{% endblock %}
