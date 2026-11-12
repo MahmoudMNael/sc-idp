@@ -1062,6 +1062,7 @@ def main() -> None:
         assert dash_ok.status_code == 200
         assert "OAUTH CLIENTS" in dash_ok.text
         assert "REGISTER NEW CLIENT" in dash_ok.text
+        assert 'value="profile"' in dash_ok.text
 
         # Register a new client
         new_client_name = "Payment Engine"
@@ -1071,7 +1072,7 @@ def main() -> None:
                 "name": new_client_name,
                 "redirect_uris": "https://payments.internal/callback\nhttp://localhost:4000/callback",
                 "post_logout_redirect_uris": "https://payments.internal/",
-                "scopes": ["openid", "email"],
+                "scopes": ["openid", "email", "profile"],
                 "is_first_party": "true",
                 "csrf_token": csrf_token(dash_ok.text),
             },
