@@ -67,11 +67,15 @@ async def oauth_context(session: AsyncSession, settings: Settings, nxt: str | No
     return None, None
 
 
-def after_login_target(settings: Settings, nxt: str | None) -> str:
+def after_login_target(settings: Settings, nxt: str | None, confirmed_user_id: str | None = None) -> str:
     if not nxt:
         return "/account"
     query = load_next(settings, nxt)
     if query:
+        if confirmed_user_id:
+            ticket = sign(settings.secret_key, "confirmed", confirmed_user_id)
+            sep = "&" if query else ""
+            return f"/authorize?{query}{sep}confirmed={ticket}"
         return f"/authorize?{query}"
     clean = nxt.strip()
     if clean.startswith("/") and not clean.startswith("//") and not clean.startswith("/\\"):
@@ -441,6 +445,7 @@ async def verify_email(
 
     # ponytail: automatically sign in verified user and redirect to after-login target
     existing = await load_session(session, settings, request.cookies.get(settings.cookie_name))
+    replace_sess = existing if (existing and existing.user_id == user.id) else None
     raw = await create_session(
         session,
         settings,
@@ -448,9 +453,9 @@ async def verify_email(
         ["pwd"],
         ip=ip_of(request),
         user_agent=request.headers.get("user-agent"),
-        replace=existing,
+        replace=replace_sess,
     )
-    dest = after_login_target(settings, next)
+    dest = after_login_target(settings, next, confirmed_user_id=str(user.id))
     response = RedirectResponse(dest, status_code=303)
     set_session_cookie(response, settings, raw)
     return response
@@ -532,10 +537,12 @@ async def login_form(
     request: Request,
     next: str = "",
     message: str = "",
+    switch_account: str = "",
     session: AsyncSession = db_dep,
     settings: Settings = s_dep,
 ):
-    if not requires_reauth(settings, next):
+    is_switch = switch_account == "1" or request.query_params.get("switch_account") == "1"
+    if not is_switch and not requires_reauth(settings, next):
         sess = await load_session(session, settings, request.cookies.get(settings.cookie_name))
         if sess:
             user = await session.get(User, sess.user_id)
@@ -556,6 +563,7 @@ async def login_form(
         cancel_url=cancel_url,
         error=None,
         verify_url=None,
+        is_switch=is_switch,
     )
 
 
@@ -673,6 +681,8 @@ async def login(
         user.password_hash = new_hash
     await apply_preassigned_roles(session, user.id, email_n)
     existing = await load_session(session, settings, request.cookies.get(settings.cookie_name))
+    # ponytail: do not revoke existing session if switching or if belonging to another user.
+    replace_sess = existing if (existing and existing.user_id == user.id) else None
     raw = await create_session(
         session,
         settings,
@@ -680,13 +690,13 @@ async def login(
         ["pwd"],
         ip=ip_of(request),
         user_agent=request.headers.get("user-agent"),
-        replace=existing,
+        replace=replace_sess,
     )
     await audit(session, "login_success", user_id=user.id, ip=ip_of(request))
     if user.totp_enabled:
         dest = f"/login/mfa?next={next}" if next else "/login/mfa"
     else:
-        dest = after_login_target(settings, next)
+        dest = after_login_target(settings, next, confirmed_user_id=str(user.id))
     response = RedirectResponse(dest, status_code=303)
     set_session_cookie(response, settings, raw)
     return response

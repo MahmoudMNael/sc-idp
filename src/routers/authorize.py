@@ -2,7 +2,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.crypto import csrf_ok
+from src.core.crypto import csrf_ok, unsign
 from src.core.deps import db_dep, s_dep
 from src.core.oauth_errors import oauth_redirect
 from src.core.settings import Settings
@@ -112,6 +112,29 @@ async def authorize(
             return fail("login_required")
         return RedirectResponse(f"/login/mfa?next={nxt}", status_code=302)
 
+    confirmed_ticket = q.get("confirmed")
+    is_confirmed = False
+    if confirmed_ticket:
+        unpacked = unsign(settings.secret_key, "confirmed", confirmed_ticket, max_age=300)
+        if unpacked and str(unpacked) == str(user.id):
+            is_confirmed = True
+
+    needs_confirm = not is_confirmed and "none" not in prompt.split() and "login" not in prompt.split()
+    if needs_confirm:
+        display_name = f"{user.first_name or ''} {user.last_name or ''}".strip() or user.email
+        initial = (user.first_name[0] if user.first_name else user.email[0]).upper()
+        return page(
+            request,
+            settings,
+            "account_confirm.html",
+            client_name=client.name,
+            user_display_name=display_name,
+            user_email=user.email,
+            user_initial=initial,
+            next=nxt,
+            cancel_url=f"/cancel?next={nxt}",
+        )
+
     needs_consent = (not client.is_first_party) or "consent" in prompt.split()
     if needs_consent:
         if "none" in prompt.split():
@@ -124,6 +147,62 @@ async def authorize(
             scopes=params["scope"],
             next=nxt,
             cancel_url=f"/cancel?next={nxt}",
+        )
+    return await _issue(session, settings, client, user, sess, params)
+
+
+@router.post("/authorize/confirm")
+async def authorize_confirm(
+    request: Request,
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+    csrf_token: str = Form(""),
+    next: str = Form(""),
+):
+    if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
+        return page(request, settings, "error.html", status=400, error="Invalid or expired form token.")
+    query = load_next(settings, next)
+    if not query:
+        return page(request, settings, "error.html", status=400, error="Authorization request expired. Start again from the application.")
+
+    sess = await load_session(session, settings, request.cookies.get(settings.cookie_name))
+    if sess is None:
+        return RedirectResponse(f"/login?next={next}", status_code=302)
+
+    user = await session.get(User, sess.user_id)
+    if user is None or not user.is_active:
+        return RedirectResponse(f"/login?next={next}", status_code=302)
+
+    if user.totp_enabled and "otp" not in sess.amr:
+        return RedirectResponse(f"/login/mfa?next={next}", status_code=302)
+
+    from urllib.parse import parse_qs
+
+    parsed = {k: v[0] if v else "" for k, v in parse_qs(query, keep_blank_values=True).items()}
+    client = await _client(session, parsed.get("client_id"))
+    redirect_uri = parsed.get("redirect_uri")
+    if client is None or not _redirect_ok(client, redirect_uri):
+        return page(request, settings, "error.html", status=400, error="Unknown or invalid client.")
+
+    prompt = parsed.get("prompt") or ""
+    needs_consent = (not client.is_first_party) or "consent" in prompt.split()
+    params = {
+        "redirect_uri": redirect_uri,
+        "scope": parsed.get("scope") or "",
+        "nonce": parsed.get("nonce") or "",
+        "code_challenge": parsed.get("code_challenge") or "",
+        "state": parsed.get("state") or "",
+        "client_id": client.client_id,
+    }
+    if needs_consent:
+        return page(
+            request,
+            settings,
+            "consent.html",
+            client_name=client.name,
+            scopes=params["scope"],
+            next=next,
+            cancel_url=f"/cancel?next={next}",
         )
     return await _issue(session, settings, client, user, sess, params)
 

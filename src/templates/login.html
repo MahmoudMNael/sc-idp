@@ -5,9 +5,11 @@
 <main class="auth-viewport">
   <div class="auth-card">
     <a href="/"><img src="/assets/logo-dark.png" alt="Short Circuit" class="auth-logo"></a>
-    <h1 class="auth-title">Sign In</h1>
+    <h1 class="auth-title">{% if is_switch %}Switch Account{% else %}Sign In{% endif %}</h1>
     <p class="auth-subtitle">
-      {% if client_name %}
+      {% if is_switch and client_name %}
+        Sign in with a different account to continue to <span class="auth-client-target">{{ client_name }}</span>
+      {% elif client_name %}
         to continue to <span class="auth-client-target">{{ client_name }}</span>
       {% else %}
         to continue to Short Circuit
