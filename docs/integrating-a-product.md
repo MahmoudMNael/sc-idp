@@ -6,6 +6,12 @@ Related docs: [IdP Technical Reference](idp-reference.md) · [Authentication & U
 
 You do **not** build login, registration, password reset, or MFA forms. Those interactions live exclusively on the IdP. Your UI only triggers "Sign in" / "Sign out" navigations and then calls **your** APIs using **your own** product tokens.
 
+> [!IMPORTANT]
+> ### First-Party Single Source of Truth Notice
+> All **first-party Short Circuit applications** (such as `sc-admin`, internal dashboards, and core services) **must** treat `sc-idp` as the canonical single source of truth for user profile identity (`sub`, `email`, `given_name`, `family_name`, `name`, `idp_roles`).
+> First-party products must not prompt users to re-enter standard identity fields or create redundant user profile editors. Products should only collect product-specific domain metadata (e.g., workspace configurations, organization settings, preferences).
+> In contrast, **third-party applications** are granted full autonomy: they may choose whether to request `profile`/`email` scopes and whether to synchronize profile data or manage their own internal identity records.
+
 ---
 
 ## 1. Responsibilities by Layer
@@ -73,6 +79,7 @@ Request scopes space-delimited in `scope`:
 | `email` | Optional | `email`, `email_verified` | Verified user email address |
 | `profile` | Optional | `given_name`, `family_name`, `name` | User name collected during registration |
 | `idp_roles` | Optional | `idp_roles` (list of strings, e.g. `["admin", "sc_member"]`) | Global company/platform roles |
+| `offline_access` | Optional | *None (triggers `refresh_token` issuance)* | Requests an IdP refresh token for ongoing background session synchronization and live profile updates. If omitted, the IdP issues no refresh token and the product operates with independent sessions. |
 
 ### Two-Tier Role Architecture
 - **IdP Roles (`idp_roles`)**: Represent high-level identity tier and platform membership claims (e.g. `admin`, `sc_member`).
@@ -84,9 +91,9 @@ Request scopes space-delimited in `scope`:
 
 | Method | Route | Purpose |
 | --- | --- | --- |
-| `GET` | `/login` | Generate PKCE `code_verifier` (43–128 characters) and `code_challenge = BASE64URL(SHA256(verifier))`. Save `code_verifier`, `state`, and `nonce` in an encrypted or signed HttpOnly session cookie. 302 redirect browser to IdP `/authorize`. |
-| `GET` | `/callback` | Must be the **exact** registered `redirect_uri`. Handle errors (`error=access_denied`). Verify `state`. Make a server-to-server POST to IdP `/token`. Validate the ID token with JWKS. Upsert user on `sub`. Mint product tokens. |
-| `POST` | `/refresh` | Rotate the **product** refresh token. Mint a fresh product access JWT. **Do not** call the IdP. |
+| `GET` | `/login` | Generate PKCE `code_verifier` (43–128 characters) and `code_challenge = BASE64URL(SHA256(verifier))`. Save `code_verifier`, `state`, and `nonce` in an encrypted or signed HttpOnly session cookie. 302 redirect browser to IdP `/authorize`. Include `offline_access` in `scope` if your product synchronizes with the IdP. |
+| `GET` | `/callback` | Must be the **exact** registered `redirect_uri`. Handle errors (`error=access_denied`). Verify `state`. Make a server-to-server POST to IdP `/token`. Validate the ID token with JWKS. Upsert user on `sub`. Mint product tokens. If `offline_access` was requested, store the IdP refresh token. |
+| `POST` | `/refresh` | Rotate the product refresh token. If using Pattern A (IdP-Synchronized), also call IdP `POST /token` (`grant_type=refresh_token`) to sync user info and check revocations. If using Pattern B (Decoupled), rotate internal product tokens locally without contacting the IdP. |
 | `GET` | `/logout` | Invalidate product refresh token, clear product cookies. Optionally 302 redirect browser to IdP `/logout`. |
 
 ---
@@ -213,23 +220,66 @@ GET {issuer}/logout?
 
 ---
 
-## 6. Refresh Token Mechanics
+## 6. Dual Refresh & Session Architecture
 
-There are two distinct refresh clocks:
+Products integrating with `sc-idp` choose between two session synchronization models:
 
-| Refresh Token | Who Handles It | Destination | Purpose |
-| --- | --- | --- | --- |
-| **Product Refresh** | Product Frontend → Product Backend | Your `/refresh` | Obtains new product access JWT without bothering the IdP. |
-| **IdP Refresh** | Product Backend → IdP | IdP `/token` (`grant_type=refresh_token`) | Rotates IdP access token if the backend needs to call `/userinfo`. |
+```
++----------------------------------------------------------------------------------------------------+
+| Model A: IdP-Synchronized Sessions (Continuous Live State)                                         |
+| - Scope requested: openid email profile offline_access                                             |
+| - On client /refresh: Client backend calls IdP POST /token (grant_type=refresh_token)               |
+| - Benefits: Immediate profile/name sync, live idp_roles updates, instant response to IdP revocation |
++----------------------------------------------------------------------------------------------------+
 
-Products must **never** send IdP refresh tokens to the browser.
++----------------------------------------------------------------------------------------------------+
+| Model B: Decoupled Product Sessions (Independent Local Clocks)                                     |
+| - Scope requested: openid email profile (no offline_access)                                         |
+| - On client /refresh: Client backend rotates internal product tokens locally without contacting IdP|
+| - Benefits: Complete network resilience, zero load on IdP during daily product API interactions    |
++----------------------------------------------------------------------------------------------------+
+```
+
+### Pattern A: IdP-Synchronized Sessions
+
+Use this pattern when your application requires continuous alignment with user profile updates or immediate termination if access is revoked in `sc-idp`:
+
+1. **Authorization Code Request**: Include `offline_access` in the requested `scope` at `GET /authorize`.
+2. **Token Storage**: Save the returned IdP `refresh_token` in your product database (e.g., `accounts.refresh_token`).
+3. **Product Refresh Handler (`POST /refresh`)**:
+   - Call `sc-idp` `POST /token` with `grant_type=refresh_token`, your client credentials, and the stored `refresh_token`.
+   - **Scope Downscoping / Optimization**: If you do not require profile updates on every refresh, pass `scope="openid email offline_access"` (omitting `profile`). The IdP will omit `name`, `given_name`, and `family_name` from the newly minted `id_token`.
+   - **User Profile Sync**: Verify the new `id_token` with JWKS, extract updated claims, and update your local database record.
+   - **Revocation Handling**: If `sc-idp` returns `400 invalid_grant` (due to user deactivation, session revocation from the IdP Account Center, or token expiration), clear product cookies and return `401 Unauthorized`.
+   - **Network Resilience Fallback**: If `sc-idp` is unreachable or times out, log a warning and fall back to local cached user data, maintaining user continuity until the IdP is reachable.
+
+### Pattern B: Decoupled Product Sessions
+
+Use this pattern when you want zero external network dependencies for active user sessions:
+
+1. **Authorization Code Request**: Omit `offline_access` from `scope`.
+2. **Token Response**: `sc-idp` returns `access_token` and `id_token`, but **no `refresh_token`**.
+3. **Product Refresh Handler (`POST /refresh`)**:
+   - The product rotates its own internal refresh tokens and access JWTs locally.
+   - The IdP is contacted only on initial login or when the product session completely expires and the user re-authenticates via `/authorize`.
 
 ---
 
-## 7. Common Integration Mistakes
+## 7. Connected Applications & Self-Service Revocation
+
+Users can view and manage all applications authorized to access their identity from the **Account Center** (`/account?tab=apps`).
+
+- **Application Listing**: Displays application name, type (First Party vs Third Party), authorized timestamp, last active timestamp, and active status.
+- **Single Revocation**: Users can click "Revoke Access" to terminate sessions for a specific application.
+- **Revoke All**: Users can click "Revoke All Applications" to immediately invalidate all client refresh tokens across all products.
+- **Client Impact**: For clients implementing **Pattern A**, the next time their backend calls `POST /token` (`grant_type=refresh_token`), the IdP rejects the call with `invalid_grant`, terminating the client session.
+
+---
+
+## 8. Common Integration Mistakes
 
 1. **SPA directly calling `/token`**: Public clients cannot protect `client_secret`. The backend must exchange the code.
 2. **Leaking IdP tokens to the browser**: The browser only receives product tokens.
 3. **Misconfigured redirect URIs**: Missing port, wrong scheme (http vs https), or mismatched trailing slashes cause immediate rejection at `/authorize`.
 4. **Skipping PKCE**: `sc-idp` strictly requires PKCE `S256` for confidential clients.
-5. **Calling IdP on product token expiration**: When a product access JWT expires, call your product's `/refresh` endpoint, not the IdP.
+5. **Missing `offline_access`**: If you expect an IdP refresh token for ongoing synchronization, you must include `offline_access` in the `scope` parameter.
