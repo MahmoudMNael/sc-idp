@@ -79,7 +79,7 @@ Request scopes space-delimited in `scope`:
 | `email` | Optional | `email`, `email_verified` | Verified user email address |
 | `profile` | Optional | `given_name`, `family_name`, `name` | User name collected during registration |
 | `idp_roles` | Optional | `idp_roles` (list of strings, e.g. `["admin", "sc_member"]`) | Global company/platform roles |
-| `offline_access` | Optional | *None (triggers `refresh_token` issuance)* | Requests an IdP refresh token for ongoing background session synchronization and live profile updates. If omitted, the IdP issues no refresh token and the product operates with independent sessions. |
+| `offline_access` | Optional | *None (triggers `refresh_token` issuance)* | Requests an IdP refresh token for ongoing background session synchronization and live profile updates (first-party apps are encouraged to use this method). If omitted, the IdP issues no refresh token and the product operates with independent sessions. |
 
 ### Two-Tier Role Architecture
 - **IdP Roles (`idp_roles`)**: Represent high-level identity tier and platform membership claims (e.g. `admin`, `sc_member`).
@@ -226,7 +226,7 @@ Products integrating with `sc-idp` choose between two session synchronization mo
 
 ```
 +----------------------------------------------------------------------------------------------------+
-| Model A: IdP-Synchronized Sessions (Continuous Live State)                                         |
+| Model A: IdP-Synchronized Sessions (first-party apps are encouraged to use this method)            |
 | - Scope requested: openid email profile offline_access                                             |
 | - On client /refresh: Client backend calls IdP POST /token (grant_type=refresh_token)               |
 | - Benefits: Immediate profile/name sync, live idp_roles updates, instant response to IdP revocation |
@@ -240,11 +240,11 @@ Products integrating with `sc-idp` choose between two session synchronization mo
 +----------------------------------------------------------------------------------------------------+
 ```
 
-### Pattern A: IdP-Synchronized Sessions
+### Pattern A: IdP-Synchronized Sessions (first-party apps are encouraged to use this method)
 
-Use this pattern when your application requires continuous alignment with user profile updates or immediate termination if access is revoked in `sc-idp`:
+Use this pattern when your application requires continuous alignment with user profile updates or immediate termination if access is revoked in `sc-idp` (first-party apps are encouraged to use this method):
 
-1. **Authorization Code Request**: Include `offline_access` in the requested `scope` at `GET /authorize`.
+1. **Authorization Code Request**: Include `offline_access` in the requested `scope` at `GET /authorize` (first-party apps are encouraged to use this method).
 2. **Token Storage**: Save the returned IdP `refresh_token` in your product database (e.g., `accounts.refresh_token`).
 3. **Product Refresh Handler (`POST /refresh`)**:
    - Call `sc-idp` `POST /token` with `grant_type=refresh_token`, your client credentials, and the stored `refresh_token`.

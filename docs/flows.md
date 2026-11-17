@@ -196,7 +196,7 @@ The browser session cookie (`idp_session`) enables Single Sign-On across multipl
 ## 6. Token Refresh & Connected Applications Revocation Lifecycle
 
 ### Refresh Token Issuance & Scope Conditioning
-- **`offline_access` Scope**: Clients must include `offline_access` in the requested `scope` to receive an IdP refresh token. If omitted, the IdP returns only `access_token` and `id_token` (Decoupled Mode).
+- **`offline_access` Scope**: Clients must include `offline_access` in the requested `scope` to receive an IdP refresh token (first-party apps are encouraged to use this method). If omitted, the IdP returns only `access_token` and `id_token` (Decoupled Mode).
 - **Scope Downscoping on Refresh**: When calling `POST /token` (`grant_type=refresh_token`), clients can pass an optional `scope` parameter. If valid (subset of originally granted scopes), the new `id_token` only emits claims matching the requested scopes. For example, omitting `profile` suppresses `given_name`, `family_name`, and `name`.
 
 ### Connected Applications Self-Service Revocation
