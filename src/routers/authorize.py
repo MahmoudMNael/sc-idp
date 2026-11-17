@@ -30,8 +30,7 @@ def _redirect_ok(client: OAuthClient, uri: str | None) -> bool:
 
 
 def _scopes_ok(requested: list[str], allowed: list[str]) -> bool:
-    valid_scopes = set(allowed) | {"offline_access"}
-    return "openid" in requested and set(requested) <= valid_scopes
+    return "openid" in requested and set(requested) <= set(allowed)
 
 
 async def _issue(session, settings, client, user, sess, params: dict) -> RedirectResponse:

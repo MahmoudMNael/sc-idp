@@ -35,9 +35,17 @@ class ClientIn(BaseModel):
     name: str
     redirect_uris: list[str] = Field(min_length=1)
     post_logout_redirect_uris: list[str] = Field(default_factory=list)
-    allowed_scopes: list[str] = Field(default_factory=lambda: ["openid", "email", "profile"])
+    allowed_scopes: list[str] = Field(default_factory=lambda: ["openid", "email", "profile", "offline_access"])
     is_first_party: bool = True
     client_id: str | None = None
+
+
+class ClientUpdateIn(BaseModel):
+    name: str | None = None
+    redirect_uris: list[str] | None = None
+    post_logout_redirect_uris: list[str] | None = None
+    allowed_scopes: list[str] | None = None
+    is_first_party: bool | None = None
 
 
 def _admin(settings: Settings, authorization: str | None) -> None:
@@ -75,6 +83,80 @@ async def create_client(
     )
     await audit(session, "admin_create_client", client_id=cid, detail={"name": body.name})
     return {"client_id": cid, "client_secret": secret}
+
+
+@router.get("/clients/{client_id}")
+async def get_client(
+    client_id: str,
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+    authorization: str | None = Header(default=None),
+):
+    _admin(settings, authorization)
+    client = await session.get(OAuthClient, client_id)
+    if not client:
+        raise HTTPException(404, "Client not found")
+    return {
+        "client_id": client.client_id,
+        "name": client.name,
+        "redirect_uris": client.redirect_uris,
+        "post_logout_redirect_uris": client.post_logout_redirect_uris,
+        "allowed_scopes": client.allowed_scopes,
+        "is_first_party": client.is_first_party,
+        "is_active": client.is_active,
+    }
+
+
+@router.put("/clients/{client_id}")
+@router.patch("/clients/{client_id}")
+async def update_client(
+    client_id: str,
+    body: ClientUpdateIn,
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+    authorization: str | None = Header(default=None),
+):
+    _admin(settings, authorization)
+    client = await session.get(OAuthClient, client_id)
+    if not client:
+        raise HTTPException(404, "Client not found")
+
+    if body.name is not None:
+        client.name = body.name.strip()
+    if body.redirect_uris is not None:
+        if not body.redirect_uris:
+            raise HTTPException(400, "redirect_uris cannot be empty")
+        client.redirect_uris = body.redirect_uris
+    if body.post_logout_redirect_uris is not None:
+        client.post_logout_redirect_uris = body.post_logout_redirect_uris
+    if body.allowed_scopes is not None:
+        client.allowed_scopes = list(dict.fromkeys(["openid"] + [s.strip() for s in body.allowed_scopes if s.strip()]))
+    if body.is_first_party is not None:
+        client.is_first_party = body.is_first_party
+
+    await audit(
+        session,
+        "admin_update_client",
+        client_id=client_id,
+        detail={
+            "name": client.name,
+            "redirect_uris": client.redirect_uris,
+            "post_logout_redirect_uris": client.post_logout_redirect_uris,
+            "allowed_scopes": client.allowed_scopes,
+            "is_first_party": client.is_first_party,
+            "via": "api",
+        },
+    )
+    await session.commit()
+    return {
+        "client_id": client.client_id,
+        "name": client.name,
+        "redirect_uris": client.redirect_uris,
+        "post_logout_redirect_uris": client.post_logout_redirect_uris,
+        "allowed_scopes": client.allowed_scopes,
+        "is_first_party": client.is_first_party,
+        "is_active": client.is_active,
+    }
 
 
 @router.post("/keys/rotate")
@@ -419,6 +501,101 @@ async def admin_toggle_client_status(
     await session.commit()
 
     return RedirectResponse("/admin/dashboard", status_code=303)
+
+
+@router.post("/dashboard/clients/{client_id}/edit")
+async def admin_edit_client(
+    client_id: str,
+    request: Request,
+    name: str = Form(...),
+    redirect_uris: str = Form(...),
+    post_logout_redirect_uris: str = Form(""),
+    scopes: list[str] = Form(default_factory=list),
+    is_first_party: str | None = Form(None),
+    csrf_token: str = Form(...),
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+):
+    admin_user, err_resp = await _get_admin_user(request, session, settings)
+    if err_resp:
+        return err_resp
+
+    clients = (
+        await session.execute(select(OAuthClient).order_by(OAuthClient.created_at.desc()))
+    ).scalars().all()
+
+    if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
+        return page(
+            request,
+            settings,
+            "admin_dashboard.html",
+            status=400,
+            current_user=admin_user,
+            clients=clients,
+            flash_error="Invalid or expired form token. Please try again.",
+        )
+
+    client = await session.get(OAuthClient, client_id)
+    if not client:
+        return page(
+            request,
+            settings,
+            "admin_dashboard.html",
+            status=404,
+            current_user=admin_user,
+            clients=clients,
+            flash_error="Client not found.",
+        )
+
+    r_uris = _parse_lines(redirect_uris)
+    if not r_uris:
+        return page(
+            request,
+            settings,
+            "admin_dashboard.html",
+            status=400,
+            current_user=admin_user,
+            clients=clients,
+            flash_error="At least one valid redirect URI is required.",
+        )
+
+    post_logout_uris = _parse_lines(post_logout_redirect_uris)
+    allowed_scopes = list(dict.fromkeys(["openid"] + [s.strip() for s in scopes if s.strip()]))
+    is_first_party_bool = is_first_party is not None and is_first_party.lower() in ("true", "1", "on", "yes")
+
+    client.name = name.strip()
+    client.redirect_uris = r_uris
+    client.post_logout_redirect_uris = post_logout_uris
+    client.allowed_scopes = allowed_scopes
+    client.is_first_party = is_first_party_bool
+
+    await audit(
+        session,
+        "admin_update_client",
+        client_id=client_id,
+        detail={
+            "name": client.name,
+            "redirect_uris": r_uris,
+            "post_logout_redirect_uris": post_logout_uris,
+            "allowed_scopes": allowed_scopes,
+            "is_first_party": is_first_party_bool,
+            "via": "dashboard",
+        },
+    )
+    await session.commit()
+
+    all_clients = (
+        await session.execute(select(OAuthClient).order_by(OAuthClient.created_at.desc()))
+    ).scalars().all()
+
+    return page(
+        request,
+        settings,
+        "admin_dashboard.html",
+        current_user=admin_user,
+        clients=all_clients,
+        flash_message=f"Client '{client.name}' updated successfully.",
+    )
 
 
 @router.get("/dashboard/users")
