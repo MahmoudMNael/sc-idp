@@ -76,6 +76,7 @@ async def token(
                 settings,
                 client=client,
                 refresh_token=form.get("refresh_token") or "",
+                requested_scope=form.get("scope") or None,
             )
             await audit(session, "token_refresh", client_id=client.client_id, ip=ip_of(request))
             return tokens
