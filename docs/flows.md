@@ -190,3 +190,17 @@ The browser session cookie (`idp_session`) enables Single Sign-On across multipl
 ### Session Fixation Defense & Account Switching
 - **Same-User Re-authentication**: On every password re-verification, MFA step-up, and logout for the current user, the previous session row is revoked and a completely new random session token is minted.
 - **Account Switching (Approach B)**: When switching to a different user via `/login?switch_account=1`, the browser cookie is pointed to the new user's newly minted session, but the previous user's session in `auth_sessions` is **not revoked**. This ensures existing tokens, refresh cycles, and sessions on other clients and devices remain active without disruption.
+
+---
+
+## 6. Token Refresh & Connected Applications Revocation Lifecycle
+
+### Refresh Token Issuance & Scope Conditioning
+- **`offline_access` Scope**: Clients must include `offline_access` in the requested `scope` to receive an IdP refresh token (first-party apps are encouraged to use this method). If omitted, the IdP returns only `access_token` and `id_token` (Decoupled Mode).
+- **Scope Downscoping on Refresh**: When calling `POST /token` (`grant_type=refresh_token`), clients can pass an optional `scope` parameter. If valid (subset of originally granted scopes), the new `id_token` only emits claims matching the requested scopes. For example, omitting `profile` suppresses `given_name`, `family_name`, and `name`.
+
+### Connected Applications Self-Service Revocation
+- Users can view and manage all active client tokens in the Account Center (`/account?tab=apps`).
+- Revoking an individual client marks matching `RefreshToken` records with `revoked_at=now()` and `revoked_reason='user_revocation'`.
+- "Revoke All Applications" revokes all active client refresh tokens for that user simultaneously.
+- When a revoked client attempts to rotate its refresh token via `POST /token`, `sc-idp` rejects the request with HTTP 400 `invalid_grant` (`refresh token reuse` or revoked family), triggering the client to terminate its local product session.

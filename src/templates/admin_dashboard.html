@@ -93,7 +93,7 @@
       </div>
       <div>
         <label>Allowed Scopes</label>
-        <div style="display: flex; gap: 1.5rem; align-items: center; margin-top: 0.65rem;">
+        <div style="display: flex; flex-wrap: wrap; gap: 1.25rem; align-items: center; margin-top: 0.65rem;">
           <label style="display: inline-flex; align-items: center; gap: 0.5rem; margin: 0; text-transform: none; font-size: 0.875rem; color: var(--text);">
             <input type="checkbox" name="scopes" value="openid" checked disabled style="width: auto; margin: 0;">
             <input type="hidden" name="scopes" value="openid">
@@ -110,6 +110,10 @@
           <label style="display: inline-flex; align-items: center; gap: 0.5rem; margin: 0; text-transform: none; font-size: 0.875rem; color: var(--text);">
             <input type="checkbox" name="scopes" value="idp_roles" checked style="width: auto; margin: 0;">
             <code>idp_roles</code>
+          </label>
+          <label style="display: inline-flex; align-items: center; gap: 0.5rem; margin: 0; text-transform: none; font-size: 0.875rem; color: var(--text);">
+            <input type="checkbox" name="scopes" value="offline_access" checked style="width: auto; margin: 0;">
+            <code>offline_access</code>
           </label>
         </div>
       </div>
@@ -203,7 +207,17 @@
             {% endif %}
           </td>
           <td style="text-align: right; white-space: nowrap;">
-            <div style="display: inline-flex; gap: 0.5rem;">
+            <div style="display: inline-flex; align-items: center; gap: 0.5rem;">
+              <button type="button" class="btn sm secondary"
+                data-client-id="{{ c.client_id }}"
+                data-name="{{ c.name }}"
+                data-redirect-uris="{{ c.redirect_uris|join('\n') }}"
+                data-post-logout-uris="{{ c.post_logout_redirect_uris|join('\n') }}"
+                data-scopes="{{ c.allowed_scopes|join(',') }}"
+                data-first-party="{{ 'true' if c.is_first_party else 'false' }}"
+                onclick="openEditClientModal(this)">
+                Edit
+              </button>
               <form method="post" action="/admin/dashboard/clients/{{ c.client_id }}/toggle-status" style="margin: 0;">
                 <input type="hidden" name="csrf_token" value="{{ csrf }}">
                 <button type="submit" class="btn sm secondary">
@@ -225,4 +239,124 @@
   <p class="muted">No clients registered yet.</p>
   {% endif %}
 </div>
+
+<!-- Edit Client Modal -->
+<dialog id="editClientModal" style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; color: var(--text); padding: 2rem; max-width: 640px; width: 90%; box-shadow: 0 16px 40px rgba(0,0,0,0.8);">
+  <form id="editClientForm" method="post" action="" onsubmit="return confirmClientEdit(event)">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
+      <h2 style="margin: 0;">EDIT OAUTH CLIENT</h2>
+      <button type="button" class="btn sm secondary" onclick="closeEditClientModal()" style="padding: 0.2rem 0.5rem; height: auto;">✕</button>
+    </div>
+    <p class="muted" style="font-size: 0.85rem; margin-top: 0; margin-bottom: 1.25rem;">
+      Update parameters for client <code id="editModalClientCid" style="font-size: 0.8rem;"></code>.
+    </p>
+
+    <!-- Warning Callout -->
+    <div style="background: rgba(244, 183, 64, 0.1); border: 1px solid rgba(244, 183, 64, 0.35); color: var(--warning); padding: 0.85rem 1rem; border-radius: 8px; margin-bottom: 1.25rem; font-size: 0.85rem; display: flex; align-items: flex-start; gap: 0.75rem; line-height: 1.5;">
+      <span style="font-size: 1.2rem; line-height: 1;">⚠️</span>
+      <div>
+        <strong style="color: #FFFFFF;">Warning:</strong> This edit may break your implementation. Modifying client name, redirect URIs, post-logout URIs, or allowed scopes can immediately break existing integrations and active client applications.
+      </div>
+    </div>
+
+    <div style="margin-bottom: 1rem;">
+      <label for="edit_client_name" style="margin-top: 0;">Client Semantic Name *</label>
+      <input id="edit_client_name" name="name" required autocomplete="off">
+    </div>
+
+    <div style="margin-bottom: 1rem;">
+      <label style="margin-top: 0;">Allowed Scopes</label>
+      <div style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-top: 0.5rem;">
+        <label style="display: inline-flex; align-items: center; gap: 0.5rem; margin: 0; text-transform: none; font-size: 0.875rem; color: var(--text);">
+          <input type="checkbox" value="openid" checked disabled style="width: auto; margin: 0;">
+          <input type="hidden" name="scopes" value="openid">
+          <code>openid</code> (required)
+        </label>
+        <label style="display: inline-flex; align-items: center; gap: 0.5rem; margin: 0; text-transform: none; font-size: 0.875rem; color: var(--text);">
+          <input type="checkbox" name="scopes" value="email" class="edit-client-scope" id="edit_scope_email" style="width: auto; margin: 0;">
+          <code>email</code>
+        </label>
+        <label style="display: inline-flex; align-items: center; gap: 0.5rem; margin: 0; text-transform: none; font-size: 0.875rem; color: var(--text);">
+          <input type="checkbox" name="scopes" value="profile" class="edit-client-scope" id="edit_scope_profile" style="width: auto; margin: 0;">
+          <code>profile</code>
+        </label>
+        <label style="display: inline-flex; align-items: center; gap: 0.5rem; margin: 0; text-transform: none; font-size: 0.875rem; color: var(--text);">
+          <input type="checkbox" name="scopes" value="idp_roles" class="edit-client-scope" id="edit_scope_idp_roles" style="width: auto; margin: 0;">
+          <code>idp_roles</code>
+        </label>
+        <label style="display: inline-flex; align-items: center; gap: 0.5rem; margin: 0; text-transform: none; font-size: 0.875rem; color: var(--text);">
+          <input type="checkbox" name="scopes" value="offline_access" class="edit-client-scope" id="edit_scope_offline_access" style="width: auto; margin: 0;">
+          <code>offline_access</code>
+        </label>
+      </div>
+    </div>
+
+    <div style="margin-bottom: 1rem;">
+      <label for="edit_redirect_uris" style="margin-top: 0;">Redirect URIs * (one per line)</label>
+      <textarea id="edit_redirect_uris" name="redirect_uris" rows="3" required style="font-family: var(--font-mono); font-size: 0.825rem;"></textarea>
+    </div>
+
+    <div style="margin-bottom: 1rem;">
+      <label for="edit_post_logout_redirect_uris" style="margin-top: 0;">Post-Logout Redirect URIs (optional, one per line)</label>
+      <textarea id="edit_post_logout_redirect_uris" name="post_logout_redirect_uris" rows="3" style="font-family: var(--font-mono); font-size: 0.825rem;"></textarea>
+    </div>
+
+    <div style="margin-bottom: 1.5rem;">
+      <label style="display: inline-flex; align-items: center; gap: 0.6rem; margin: 0; text-transform: none; font-size: 0.875rem; color: var(--text); cursor: pointer;">
+        <input type="checkbox" id="edit_is_first_party" name="is_first_party" value="true" style="width: auto; margin: 0;">
+        <span>First-party application (bypass user authorization consent prompt)</span>
+      </label>
+    </div>
+
+    <div style="display: flex; justify-content: flex-end; gap: 0.75rem; border-top: 1px solid var(--border); padding-top: 1.25rem;">
+      <button type="button" class="btn secondary" onclick="closeEditClientModal()">Cancel</button>
+      <button type="submit">SAVE CHANGES</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+  function openEditClientModal(btn) {
+    var cid = btn.getAttribute('data-client-id');
+    var name = btn.getAttribute('data-name');
+    var rUris = btn.getAttribute('data-redirect-uris') || '';
+    var pUris = btn.getAttribute('data-post-logout-uris') || '';
+    var scopesStr = btn.getAttribute('data-scopes') || '';
+    var scopes = scopesStr ? scopesStr.split(',') : [];
+    var isFirstParty = btn.getAttribute('data-first-party') === 'true';
+
+    var modal = document.getElementById('editClientModal');
+    var form = document.getElementById('editClientForm');
+    form.action = '/admin/dashboard/clients/' + encodeURIComponent(cid) + '/edit';
+
+    document.getElementById('editModalClientCid').innerText = cid;
+    document.getElementById('edit_client_name').value = name;
+    document.getElementById('edit_redirect_uris').value = rUris;
+    document.getElementById('edit_post_logout_redirect_uris').value = pUris;
+    document.getElementById('edit_is_first_party').checked = isFirstParty;
+
+    var checkboxes = modal.querySelectorAll('.edit-client-scope');
+    checkboxes.forEach(function(chk) {
+      chk.checked = scopes.includes(chk.value);
+    });
+
+    modal.showModal();
+  }
+
+  function closeEditClientModal() {
+    var modal = document.getElementById('editClientModal');
+    if (modal) modal.close();
+  }
+
+  function confirmClientEdit(e) {
+    var confirmed = window.confirm('Warning: Modifying this client may break your implementation. Are you sure you want to proceed?');
+    if (!confirmed) {
+      e.preventDefault();
+      return false;
+    }
+    return true;
+  }
+</script>
 {% endblock %}

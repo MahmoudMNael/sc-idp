@@ -19,7 +19,7 @@ from src.core.crypto import (
 from src.core.deps import db_dep, ip_of, s_dep
 from src.core.settings import Settings
 from src.html import page
-from src.models import AuthSession, MfaRecoveryCode, User
+from src.models import AuthSession, MfaRecoveryCode, OAuthClient, RefreshToken, User
 from src.routers.accounts import after_login_target, oauth_context
 from src.services.audit import audit
 from src.services.roles import RoleName, get_user_roles
@@ -122,6 +122,39 @@ async def account_mfa(
     user_roles = await get_user_roles(session, user.id)
     is_admin = RoleName.ADMIN in user_roles
 
+    now = datetime.now(UTC)
+    stmt = (
+        select(OAuthClient, RefreshToken)
+        .join(RefreshToken, RefreshToken.client_id == OAuthClient.client_id)
+        .where(RefreshToken.user_id == user.id)
+        .order_by(RefreshToken.created_at.desc())
+    )
+    res = (await session.execute(stmt)).all()
+    clients_map: dict[str, dict] = {}
+    for client_obj, rt in res:
+        cid = client_obj.client_id
+        is_token_active = rt.revoked_at is None and rt.expires_at > now and rt.family_expires_at > now
+        if cid not in clients_map:
+            clients_map[cid] = {
+                "client_id": cid,
+                "client_name": client_obj.name,
+                "is_first_party": client_obj.is_first_party,
+                "scope": rt.scope,
+                "created_at": rt.created_at,
+                "last_active": rt.used_at or rt.created_at,
+                "is_active": is_token_active,
+            }
+        else:
+            if is_token_active:
+                clients_map[cid]["is_active"] = True
+            if rt.created_at and rt.created_at < clients_map[cid]["created_at"]:
+                clients_map[cid]["created_at"] = rt.created_at
+            token_active_time = rt.used_at or rt.created_at
+            if token_active_time and token_active_time > clients_map[cid]["last_active"]:
+                clients_map[cid]["last_active"] = token_active_time
+
+    connected_clients = list(clients_map.values())
+
     pending_uri = None
     if user.totp_secret_enc and not user.totp_enabled:
         secret = decrypt_secret(settings.key_encryption_key, user.totp_secret_enc)
@@ -142,7 +175,49 @@ async def account_mfa(
         tab=tab,
         message=message,
         error=error,
+        connected_clients=connected_clients,
     )
+
+
+@router.post("/account/clients/revoke")
+async def account_client_revoke(
+    request: Request,
+    client_id: str = Form(""),
+    revoke_all: str = Form(""),
+    csrf_token: str = Form(""),
+    session: AsyncSession = db_dep,
+    settings: Settings = s_dep,
+):
+    if not csrf_ok(settings.secret_key, request.cookies.get("csrf"), csrf_token):
+        return page(request, settings, "error.html", status=400, error="Invalid form token.")
+    sess, user = await _user_session(request, session, settings)
+    if sess is None or user is None:
+        return RedirectResponse("/login", status_code=302)
+
+    now = datetime.now(UTC)
+    if revoke_all == "1" or client_id == "__all__":
+        await session.execute(
+            update(RefreshToken)
+            .where(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None))
+            .values(revoked_at=now, revoked_reason="user_revocation_all")
+        )
+        await audit(session, "user_revoke_all_clients", user_id=user.id, ip=ip_of(request))
+        return RedirectResponse("/account?tab=apps&message=All+application+sessions+have+been+revoked.", status_code=303)
+
+    if client_id:
+        await session.execute(
+            update(RefreshToken)
+            .where(
+                RefreshToken.user_id == user.id,
+                RefreshToken.client_id == client_id,
+                RefreshToken.revoked_at.is_(None),
+            )
+            .values(revoked_at=now, revoked_reason="user_revocation")
+        )
+        await audit(session, "user_revoke_client", user_id=user.id, client_id=client_id, ip=ip_of(request))
+        return RedirectResponse("/account?tab=apps&message=Application+access+revoked.", status_code=303)
+
+    return RedirectResponse("/account?tab=apps", status_code=303)
 
 
 @router.post("/account/profile")

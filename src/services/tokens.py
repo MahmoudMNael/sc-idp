@@ -170,29 +170,31 @@ async def _mint_pair(
         id_claims["idp_roles"] = user_roles
         id_claims["roles"] = user_roles
     id_token = mint_idp_jwt(id_claims, key)
-    refresh_raw = random_token(48)
-    row = RefreshToken(
-        token_hash=hash_token(settings.token_hash_pepper, refresh_raw),
-        family_id=family_id,
-        parent_id=parent_id,
-        user_id=user.id,
-        client_id=client.client_id,
-        scope=scope,
-        auth_time=auth_time,
-        amr=amr,
-        expires_at=now + timedelta(seconds=settings.idp_refresh_ttl),
-        family_expires_at=family_expires_at,
-    )
-    session.add(row)
-    await session.flush()
-    return {
+    res = {
         "access_token": access,
         "token_type": "Bearer",
         "expires_in": settings.idp_access_ttl,
-        "refresh_token": refresh_raw,
         "id_token": id_token,
         "scope": scope,
     }
+    if "offline_access" in scopes_set:
+        refresh_raw = random_token(48)
+        row = RefreshToken(
+            token_hash=hash_token(settings.token_hash_pepper, refresh_raw),
+            family_id=family_id,
+            parent_id=parent_id,
+            user_id=user.id,
+            client_id=client.client_id,
+            scope=scope,
+            auth_time=auth_time,
+            amr=amr,
+            expires_at=now + timedelta(seconds=settings.idp_refresh_ttl),
+            family_expires_at=family_expires_at,
+        )
+        session.add(row)
+        await session.flush()
+        res["refresh_token"] = refresh_raw
+    return res
 
 
 async def exchange_code(
@@ -253,6 +255,7 @@ async def rotate_refresh(
     *,
     client: OAuthClient,
     refresh_token: str,
+    requested_scope: str | None = None,
 ) -> dict:
     now = _now()
     row = (
@@ -275,13 +278,23 @@ async def rotate_refresh(
     user = await session.get(User, row.user_id)
     if user is None or not user.is_active:
         raise TokenError("invalid_grant", "user disabled")
+
+    if requested_scope:
+        granted_set = set(row.scope.split())
+        req_set = set(requested_scope.split())
+        if not (req_set <= granted_set):
+            raise TokenError("invalid_scope", "requested scope exceeds originally granted scope")
+        effective_scope = " ".join(sorted(req_set | {"offline_access"}))
+    else:
+        effective_scope = row.scope
+
     row.used_at = now
     return await _mint_pair(
         session,
         settings,
         user=user,
         client=client,
-        scope=row.scope,
+        scope=effective_scope,
         nonce=None,
         auth_time=row.auth_time,
         amr=row.amr,
